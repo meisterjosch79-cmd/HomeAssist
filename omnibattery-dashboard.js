@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.2.0";
+const OB_VERSION = "0.3.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" },
@@ -15,10 +15,12 @@ const WIDGET_TYPES = {
 
 const LABELS = {
   type: "Typ", width: "Breite (1-4 Spalten)", name: "Name", soc: "Ladestand (SOC) Entität",
-  power: "Leistung Entität", invert_power: "Vorzeichen umkehren (Standard: + = Laden)",
-  capacity_kwh: "Kapazität (kWh, optional)", solar: "Solarproduktion", grid: "Netz (+ = Bezug)",
-  battery: "Batterie (+ = Laden)", home: "Hausverbrauch (leer = berechnen)",
-  invert_grid: "Netz-Vorzeichen umkehren", invert_battery: "Batterie-Vorzeichen umkehren",
+  power: "Leistung (mehrere Sensoren werden addiert)", invert_power: "Vorzeichen umkehren (Standard: + = Laden)",
+  capacity_kwh: "Kapazität (kWh, optional)", solar: "Solarproduktion (mehrere Sensoren werden addiert)",
+  grid: "Netz: Leistung (+ = Bezug) bzw. Bezug-Sensor", grid_export: "Netz: Einspeisung-Sensor (optional, separater Sensor)",
+  battery: "Batterie (+ = Laden, mehrere werden addiert)",
+  home: "Hausverbrauch (mehrere Sensoren werden addiert; leer = berechnen)",
+  invert_grid: "Netz-Vorzeichen umkehren (wenn Einspeisung als Bezug angezeigt wird)", invert_battery: "Batterie-Vorzeichen umkehren",
   entity: "Entität", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte / Entitäten",
   max: "Maximalwert für Balken (leer = automatisch)", hours: "Zeitraum (Stunden)",
 };
@@ -28,16 +30,17 @@ const NAME = { name: "name", selector: { text: {} } };
 // Filter für die Entitätsauswahl: [domain, device_class]. Über "Filter" im Editor abschaltbar.
 const FILTERS = {
   soc: ["sensor", ["battery"]], power: ["sensor", ["power"]], solar: ["sensor", ["power"]],
-  grid: ["sensor", ["power"]], battery: ["sensor", ["power"]], home: ["sensor", ["power"]],
+  grid: ["sensor", ["power"]], grid_export: ["sensor", ["power"]], battery: ["sensor", ["power"]], home: ["sensor", ["power"]],
   entities: ["sensor", ["power", "energy"]], entity: [null, null],
 };
 const ENT = (n) => ({ name: n, selector: { entity: {} }, _f: n });
+const MULTI = (n) => ({ name: n, selector: { entity: { multiple: true } }, _f: n });
 const BOOL = (n) => ({ name: n, selector: { boolean: {} } });
 
 const SCHEMAS = {
-  battery: [NAME, ENT("soc"), ENT("power"), BOOL("invert_power"),
+  battery: [NAME, ENT("soc"), MULTI("power"), BOOL("invert_power"),
     { name: "capacity_kwh", selector: { number: { min: 0, step: 0.1, mode: "box" } } }, WIDTH],
-  flow: [NAME, ENT("solar"), ENT("grid"), ENT("battery"), ENT("home"), BOOL("invert_grid"), BOOL("invert_battery"), WIDTH],
+  flow: [NAME, MULTI("solar"), MULTI("grid"), MULTI("grid_export"), MULTI("battery"), MULTI("home"), BOOL("invert_grid"), BOOL("invert_battery"), WIDTH],
   value: [NAME, ENT("entity"), { name: "icon", selector: { icon: {} } },
     { name: "decimals", selector: { number: { min: 0, max: 4, mode: "box" } } }, WIDTH],
   devices: [NAME, { name: "entities", selector: { entity: { multiple: true } }, _f: "entities" },
@@ -80,12 +83,20 @@ class OmniBatteryDashboard extends HTMLElement {
   _entityIds() {
     const ids = [];
     for (const w of this._config?.widgets || []) {
-      for (const k of ["soc", "power", "solar", "grid", "battery", "home", "entity"]) if (w[k]) ids.push(w[k]);
+      for (const k of ["soc", "entity"]) if (w[k]) ids.push(w[k]);
+      for (const k of ["power", "solar", "grid", "grid_export", "battery", "home"]) ids.push(...this._ids(w[k]));
       if (Array.isArray(w.entities)) ids.push(...w.entities);
     }
     return ids;
   }
 
+  _ids(v) { return Array.isArray(v) ? v : v ? [v] : []; }
+  /** Summe in Watt über einen oder mehrere Sensoren (null, wenn kein Wert verfügbar) */
+  _sumW(v) {
+    let sum = null;
+    for (const id of this._ids(v)) { const w = this._watts(id); if (w !== null) sum = (sum || 0) + w; }
+    return sum;
+  }
   _st(id) { return id ? this._hass?.states?.[id] : undefined; }
   _num(id) { const s = this._st(id); const v = s ? parseFloat(s.state) : NaN; return isNaN(v) ? null : v; }
   /** Wert in Watt, berücksichtigt kW/MW */
@@ -106,7 +117,7 @@ class OmniBatteryDashboard extends HTMLElement {
   // ---------- Widgets ----------
   _battery(w) {
     const soc = this._num(w.soc);
-    let p = this._watts(w.power);
+    let p = this._sumW(w.power);
     if (p !== null && w.invert_power) p = -p;
     const state = p === null ? "" : p > 20 ? "Laden" : p < -20 ? "Entladen" : "Leerlauf";
     const col = p === null || Math.abs(p) <= 20 ? "var(--secondary-text-color)" : p > 0 ? "#2e9e5b" : "#e8833a";
@@ -125,22 +136,26 @@ class OmniBatteryDashboard extends HTMLElement {
   }
 
   _flow(w) {
-    const solar = this._watts(w.solar);
-    let grid = this._watts(w.grid); if (grid !== null && w.invert_grid) grid = -grid;
-    let bat = this._watts(w.battery); if (bat !== null && w.invert_battery) bat = -bat;
-    let home = this._watts(w.home);
+    const solar = this._sumW(w.solar);
+    const imp = this._sumW(w.grid), exp = this._sumW(w.grid_export);
+    // Netto: + = Bezug, - = Einspeisung. Mit separatem Einspeise-Sensor: Bezug - Einspeisung.
+    let grid = imp === null && exp === null ? null : (imp || 0) - (exp || 0);
+    if (grid !== null && w.invert_grid) grid = -grid;
+    let bat = this._sumW(w.battery); if (bat !== null && w.invert_battery) bat = -bat;
+    let home = this._sumW(w.home);
     if (home === null && (solar !== null || grid !== null || bat !== null)) {
       home = Math.max(0, (solar || 0) + (grid || 0) - (bat || 0));
     }
     const node = (icon, label, val, note, color) =>
       `<div class="node"><div class="ni">${icon}</div><div class="nl">${label}</div><div class="nv" style="color:${color}">${this._fmtW(val === null ? null : Math.abs(val))}</div><div class="sub">${note}</div></div>`;
-    const arrow = (dir) => `<div class="arrow">${dir}</div>`;
+    const gridNote = grid === null ? "" : grid > 10 ? "⬇ Netzbezug" : grid < -10 ? "⬆ Einspeisung" : "Ausgeglichen";
+    const gridCol = grid > 10 ? "#c0392b" : grid < -10 ? "#2e9e5b" : "var(--secondary-text-color)";
+    const hasGrid = this._ids(w.grid).length || this._ids(w.grid_export).length;
     return `<div class="flow">
-      ${w.solar ? node("☀️", "Solar", solar, solar > 10 ? "Produktion" : "Keine Produktion", "#e0a800") : "<div></div>"}
-      ${arrow(solar > 10 ? "↓" : "")}
-      ${w.grid ? node("🏭", "Netz", grid, grid === null ? "" : grid > 10 ? "Bezug" : grid < -10 ? "Einspeisung" : "Ausgeglichen", grid > 10 ? "#c0392b" : "#2e9e5b") : "<div></div>"}
+      ${this._ids(w.solar).length ? node("☀️", "Solar", solar, solar > 10 ? "Produktion" : "Keine Produktion", "#e0a800") : "<div></div>"}
+      ${hasGrid ? node("🏭", "Netz", grid, gridNote, gridCol) : "<div></div>"}
       ${node("🏠", "Haus", home, "Verbrauch", "var(--primary-text-color)")}
-      ${w.battery ? node("🔋", "Batterie", bat, bat === null ? "" : bat > 20 ? "Laden" : bat < -20 ? "Entladen" : "Leerlauf", bat > 20 ? "#2e9e5b" : bat < -20 ? "#e8833a" : "var(--secondary-text-color)") : "<div></div>"}
+      ${this._ids(w.battery).length ? node("🔋", "Batterie", bat, bat === null ? "" : bat > 20 ? "Laden" : bat < -20 ? "Entladen" : "Leerlauf", bat > 20 ? "#2e9e5b" : bat < -20 ? "#e8833a" : "var(--secondary-text-color)") : "<div></div>"}
     </div>`;
   }
 
