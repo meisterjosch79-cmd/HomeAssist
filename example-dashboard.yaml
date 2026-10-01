@@ -1,0 +1,27 @@
+# Beispiel: Ansicht im "Panel"- oder "Sections"-Modus mit der Karte.
+# Die Entitäts-IDs bitte unter Einstellungen → Geräte & Dienste → OmniBattery nachsehen
+# oder direkt im visuellen Karten-Editor auswählen.
+type: custom:omnibattery-dashboard
+title: Energie
+widgets:
+  - type: battery
+    name: Batterie
+    soc: sensor.omnibattery_battery_soc        # anpassen
+    power: sensor.omnibattery_battery_power    # anpassen
+    capacity_kwh: 5.12
+  - type: flow
+    name: Energiefluss
+    width: 2
+    solar: sensor.solar_power                  # anpassen
+    grid: sensor.grid_power
+    battery: sensor.omnibattery_battery_power
+  - type: devices
+    name: Verbrauch Geräte
+    entities:
+      - sensor.waschmaschine_power
+      - sensor.trockner_power
+  - type: history
+    name: Solar (24h)
+    entity: sensor.solar_power
+    hours: 24
+    width: 2
