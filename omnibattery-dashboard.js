@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.1.0";
+const OB_VERSION = "0.2.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" },
@@ -29,7 +29,7 @@ const NAME = { name: "name", selector: { text: {} } };
 const FILTERS = {
   soc: ["sensor", ["battery"]], power: ["sensor", ["power"]], solar: ["sensor", ["power"]],
   grid: ["sensor", ["power"]], battery: ["sensor", ["power"]], home: ["sensor", ["power"]],
-  entities: ["sensor", ["power", "energy"]], entity: ["sensor", null],
+  entities: ["sensor", ["power", "energy"]], entity: [null, null],
 };
 const ENT = (n) => ({ name: n, selector: { entity: {} }, _f: n });
 const BOOL = (n) => ({ name: n, selector: { boolean: {} } });
@@ -222,6 +222,112 @@ class OmniBatteryDashboard extends HTMLElement {
   }
 }
 
+/** Entitäts-Auswahl: erst Gerät wählen, dann Sensoren inkl. aktuellem Wert sehen und auswählen. */
+class ObEntityPicker extends HTMLElement {
+  constructor() { super(); this._open = false; this._device = ""; this._q = ""; }
+  set hass(h) { this._hass = h; if (this._open) this._renderList(); else if (this._built) this._renderHead(); }
+  set value(v) { this._value = v; if (this._built) this._renderHead(); }
+  set options(o) { this._opts = o; }  // { label, multiple, domain, classes }
+
+  connectedCallback() {
+    if (this._built) return;
+    this._built = true;
+    this.innerHTML = `<style>
+      .p{margin:10px 0}.p .lb{font-size:.85em;color:var(--secondary-text-color);margin-bottom:4px}
+      .p .sel{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--divider-color);border-radius:8px;background:var(--card-background-color);margin-bottom:4px}
+      .p .sel .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .p .sel .v{font-weight:600}.p .sel .x{cursor:pointer;opacity:.7}
+      .p button,.p select,.p input{padding:6px 10px;border-radius:6px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);font:inherit}
+      .p button{cursor:pointer}.p .panel{border:1px solid var(--primary-color);border-radius:8px;padding:8px;margin-top:6px}
+      .p .panel select,.p .panel input{width:100%;box-sizing:border-box;margin-bottom:6px}
+      .p .list{max-height:300px;overflow:auto}
+      .p .it{display:flex;justify-content:space-between;gap:8px;padding:8px 6px;border-bottom:1px solid var(--divider-color);cursor:pointer}
+      .p .it:hover{background:var(--secondary-background-color)}
+      .p .it .n{min-width:0}.p .it small{display:block;color:var(--secondary-text-color);overflow:hidden;text-overflow:ellipsis}
+      .p .it .v{white-space:nowrap;font-weight:600}
+    </style><div class="p"><div class="lb"></div><div class="head"></div><div class="panel" hidden>
+      <select class="dev"></select><input class="q" placeholder="Durchsuchen …"><div class="list"></div></div></div>`;
+    this.querySelector(".lb").textContent = this._opts?.label || "";
+    this.querySelector(".dev").addEventListener("change", (e) => { this._device = e.target.value; this._renderList(); });
+    this.querySelector(".q").addEventListener("input", (e) => { this._q = e.target.value.toLowerCase(); this._renderList(); });
+    this.querySelector(".list").addEventListener("click", (e) => {
+      const it = e.target.closest(".it"); if (it) this._pick(it.dataset.id);
+    });
+    this.querySelector(".head").addEventListener("click", (e) => {
+      const t = e.target;
+      if (t.dataset.rm !== undefined) this._set(this._opts.multiple ? this._arr().filter((x) => x !== t.dataset.rm) : "");
+      else if (t.dataset.open !== undefined) this._toggle(true);
+    });
+    this._renderHead();
+  }
+
+  _arr() { return Array.isArray(this._value) ? this._value : this._value ? [this._value] : []; }
+  _set(v) { this._value = v; this.dispatchEvent(new CustomEvent("picked", { detail: { value: v } })); this._renderHead(); }
+  _pick(id) {
+    if (this._opts.multiple) { if (!this._arr().includes(id)) this._set([...this._arr(), id]); }
+    else { this._set(id); this._toggle(false); }
+  }
+  _toggle(open) {
+    this._open = open;
+    this.querySelector(".panel").hidden = !open;
+    if (open) { this._fillDevices(); this._renderList(); this.querySelector(".q").focus(); }
+    this._renderHead();
+  }
+
+  _val(id) {
+    const st = this._hass?.states?.[id]; if (!st) return "n/a";
+    try { if (this._hass.formatEntityState) return this._hass.formatEntityState(st); } catch (e) { /* fallback */ }
+    return `${st.state} ${st.attributes.unit_of_measurement || ""}`.trim();
+  }
+  _devName(id) {
+    const did = this._hass?.entities?.[id]?.device_id;
+    const d = did && this._hass.devices?.[did];
+    return d ? d.name_by_user || d.name || did : "";
+  }
+  _entName(id) {
+    const n = this._hass?.states?.[id]?.attributes?.friendly_name || id;
+    const dn = this._devName(id);
+    return dn && n.startsWith(dn + " ") ? n.slice(dn.length + 1) : n;
+  }
+  _candidates() {
+    const o = this._opts || {}, st = this._hass?.states || {};
+    return Object.keys(st).filter((id) => {
+      if (o.domain && !id.startsWith(o.domain + ".")) return false;
+      if (o.classes && !o.classes.includes(st[id].attributes.device_class)) return false;
+      return true;
+    });
+  }
+
+  _renderHead() {
+    const h = this.querySelector(".head"); if (!h) return;
+    const rows = this._arr().map((id) => `<div class="sel"><div class="n">${esc(this._entName(id))} <small>${esc(this._devName(id))}</small></div>
+      <span class="v">${esc(this._val(id))}</span><span class="x" data-rm="${esc(id)}" title="Entfernen">✕</span></div>`).join("");
+    h.innerHTML = rows + (this._opts.multiple || !this._arr().length
+      ? `<button data-open>${this._opts.multiple ? "+ Sensor hinzufügen" : "Sensor auswählen …"}</button>`
+      : `<button data-open>Ändern …</button>`);
+  }
+
+  _fillDevices() {
+    const sel = this.querySelector(".dev"), cur = this._device;
+    const devs = new Map();
+    for (const id of this._candidates()) { const n = this._devName(id) || "(ohne Gerät)"; devs.set(n, (devs.get(n) || 0) + 1); }
+    const names = [...devs.keys()].sort((a, b) => a.localeCompare(b));
+    sel.innerHTML = `<option value="">Alle Geräte (${[...devs.values()].reduce((a, b) => a + b, 0)})</option>` +
+      names.map((n) => `<option value="${esc(n)}">${esc(n)} (${devs.get(n)})</option>`).join("");
+    sel.value = names.includes(cur) ? cur : "";
+    this._device = sel.value;
+  }
+
+  _renderList() {
+    const l = this.querySelector(".list"); if (!l) return;
+    const items = this._candidates().map((id) => ({ id, dev: this._devName(id) || "(ohne Gerät)", name: this._entName(id) }))
+      .filter((x) => (!this._device || x.dev === this._device) && (!this._q || (x.name + x.id + x.dev).toLowerCase().includes(this._q)))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    l.innerHTML = items.slice(0, 300).map((x) => `<div class="it" data-id="${esc(x.id)}"><div class="n">${esc(x.name)}<small>${esc(this._device ? x.id : x.dev + " · " + x.id)}</small></div>
+      <div class="v">${esc(this._val(x.id))}</div></div>`).join("") || '<div class="it">Keine passenden Sensoren (Filter im Editor abschaltbar)</div>';
+  }
+}
+
 class OmniBatteryDashboardEditor extends HTMLElement {
   setConfig(config) {
     const json = JSON.stringify(config);
@@ -231,16 +337,14 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   }
   set hass(h) {
     this._hass = h;
-    this.querySelectorAll("ha-form").forEach((f) => (f.hass = h));
+    this.querySelectorAll("ha-form, ob-entity-picker").forEach((f) => (f.hass = h));
   }
 
-  _schema(type) {
-    return (SCHEMAS[type] || []).map(({ _f, ...f }) => {
-      const flt = this._filterOn !== false && _f && FILTERS[_f];
-      if (!flt) return f;
-      const sel = { domain: flt[0] };
-      if (flt[1]) sel.device_class = flt[1];
-      return { ...f, selector: { entity: { ...f.selector.entity, ...sel } } };
+  _fields(type) {
+    return (SCHEMAS[type] || []).map((f) => {
+      const isEnt = !!f._f;
+      const flt = isEnt && this._filterOn !== false ? FILTERS[f._f] : null;
+      return { name: f.name, schema: f, isEnt, multiple: !!f.selector?.entity?.multiple, domain: flt?.[0] || null, classes: flt?.[1] || null };
     });
   }
 
@@ -259,7 +363,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       .ob input.t{width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color)}
     </style><div class="ob">
       <label>Titel</label><input class="t" id="title" value="${esc(this._config.title)}">
-      <label><input type="checkbox" id="flt" ${this._filterOn === false ? "" : "checked"}> Entitäten-Liste vorfiltern (Leistung / Batterie)</label>
+      <label><input type="checkbox" id="flt" ${this._filterOn === false ? "" : "checked"}> Sensorliste vorfiltern (Leistung / Batterie)</label>
       <div id="list"></div>
       <div class="row"><select id="newtype">${Object.entries(WIDGET_TYPES).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join("")}</select>
         <button id="add">+ Widget hinzufügen</button></div></div>`;
@@ -276,19 +380,35 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       d.addEventListener("toggle", () => { (this._open ||= new Set())[d.open ? "add" : "delete"](i); });
       const t = WIDGET_TYPES[w.type] || { icon: "?", label: w.type };
       d.innerHTML = `<summary>${t.icon} ${esc(w.name || t.label)}</summary>`;
+      const fields = this._fields(w.type);
+      const plain = fields.filter((f) => !f.isEnt);
+      const upd = (patch) => {
+        this._config.widgets = this._config.widgets.map((x, j) => {
+          if (j !== i) return x;
+          const nw = { ...x, ...patch };
+          for (const k of Object.keys(nw)) if (nw[k] === "" || nw[k] === undefined || (Array.isArray(nw[k]) && !nw[k].length)) delete nw[k];
+          return nw;
+        });
+        this._emit();
+      };
       const form = document.createElement("ha-form");
       form.hass = this._hass;
-      form.data = w;
-      form.schema = this._schema(w.type);
+      form.data = Object.fromEntries(plain.map((f) => [f.name, w[f.name]]));
+      form.schema = plain.map((f) => f.schema).map(({ _f, ...f }) => f);
       form.computeLabel = (s) => LABELS[s.name] || s.name;
       form.addEventListener("value-changed", (ev) => {
         ev.stopPropagation();
-        const nw = { ...ev.detail.value, type: w.type };
-        for (const k of Object.keys(nw)) if (nw[k] === "" || nw[k] === undefined) delete nw[k];
-        this._config.widgets = this._config.widgets.map((x, j) => (j === i ? nw : x));
-        this._emit();
+        upd(Object.fromEntries(plain.map((f) => [f.name, ev.detail.value[f.name]])));
       });
       d.appendChild(form);
+      for (const f of fields.filter((x) => x.isEnt)) {
+        const pk = document.createElement("ob-entity-picker");
+        pk.options = { label: LABELS[f.name] || f.name, multiple: f.multiple, domain: f.domain, classes: f.classes };
+        pk.value = w[f.name];
+        pk.hass = this._hass;
+        pk.addEventListener("picked", (ev) => { ev.stopPropagation(); upd({ [f.name]: ev.detail.value }); });
+        d.appendChild(pk);
+      }
       const row = document.createElement("div");
       row.className = "row";
       row.innerHTML = `<button data-a="up">↑</button><button data-a="down">↓</button><button data-a="del">🗑 Entfernen</button>`;
@@ -305,6 +425,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   }
 }
 
+customElements.define("ob-entity-picker", ObEntityPicker);
 customElements.define("omnibattery-dashboard", OmniBatteryDashboard);
 customElements.define("omnibattery-dashboard-editor", OmniBatteryDashboardEditor);
 window.customCards = window.customCards || [];
