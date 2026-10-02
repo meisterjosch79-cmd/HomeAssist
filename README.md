@@ -61,7 +61,7 @@ Das Feld **Leistung** (Batterie-Widget) bzw. **Batterie** (Energiefluss) addiert
 | `flow` | Solar / Netz / Batterie / Haus mit Einzelwerten aller Sensoren |
 | `value` | Beliebiger Einzelwert |
 | `devices` | Verbrauchsliste mehrerer Geräte mit Balken |
-| `balance` | Energiebilanz: Zufluss minus alle Verbraucher = „Energiemenge nicht zugeordnet“ |
+| `balance` | Energiebilanz (automatisch): Quellen aus den Energiefluss-/Batterie-Widgets, Verbraucher aus den Geräteverbrauch-Widgets, Rest = „Energiemenge nicht zugeordnet“ |
 | `history` | Verlaufsdiagramm einer Entität |
 
 Siehe `example-dashboard.yaml`.

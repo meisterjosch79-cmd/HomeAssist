@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.10.0";
+const OB_VERSION = "0.11.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -22,12 +22,12 @@ const LABELS = {
   battery: "Batterie (+ = Laden; Entlade-Sensor mit „abziehen“ markieren)",
   home: "Hausverbrauch (mehrere Sensoren werden addiert; leer = berechnen)",
   invert_grid: "Netz-Vorzeichen umkehren (wenn Einspeisung als Bezug angezeigt wird)", invert_battery: "Batterie-Vorzeichen umkehren",
-  entity: "Entität", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte / Entitäten",
+  entity: "Entität", exclude: "Ignorieren (diese Sensoren nicht mitzählen, optional)", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte / Entitäten",
   max: "Maximalwert für Balken (leer = automatisch)", hours: "Zeitraum (Stunden)",
 };
 
 // Typabhängige Feldbeschriftungen
-const LABELS_T = { balance: { entities: "Verbraucher (jeder Sensor wird nur einmal gezählt)" } };
+const LABELS_T = { balance: { entities: "Zusätzliche Verbraucher (optional – Geräte aus den Geräte-Widgets werden automatisch übernommen)" } };
 const WIDTH = { name: "width", selector: { number: { min: 1, max: 4, mode: "box" } } };
 const NAME = { name: "name", selector: { text: {} } };
 // Filter für die Entitätsauswahl: [domain, device_class]. Über "Filter" im Editor abschaltbar.
@@ -36,7 +36,7 @@ const U_POWER = ["W", "kW", "MW", "Wh", "kWh", "MWh"];
 const PW = ["sensor", ["power", "energy"], U_POWER];
 const FILTERS = {
   soc: ["sensor", ["battery"], ["%"]], power: PW, solar: PW, grid: PW, grid_export: PW, battery: PW, home: PW, entities: PW,
-  entity: [null, null, null],
+  entity: [null, null, null], exclude: [null, null, null],
 };
 const ENT = (n) => ({ name: n, selector: { entity: {} }, _f: n });
 const MULTI = (n) => ({ name: n, selector: { entity: { multiple: true } }, _f: n });
@@ -50,7 +50,7 @@ const SCHEMAS = {
     { name: "decimals", selector: { number: { min: 0, max: 4, mode: "box" } } }, WIDTH],
   devices: [NAME, { name: "entities", selector: { entity: { multiple: true } }, _f: "entities" },
     { name: "max", selector: { number: { min: 0, mode: "box" } } }, WIDTH],
-  balance: [NAME, MULTI("solar"), MULTI("grid"), MULTI("grid_export"), MULTI("battery"), BOOL("invert_grid"), BOOL("invert_battery"), MULTI("entities"), WIDTH],
+  balance: [NAME, MULTI("entities"), MULTI("exclude"), WIDTH],
   history: [NAME, ENT("entity"), { name: "hours", selector: { number: { min: 1, max: 168, mode: "box" } } }, WIDTH],
 };
 
@@ -229,21 +229,47 @@ class OmniBatteryDashboard extends HTMLElement {
       ${r.v !== null ? `<div class="bar"><i style="width:${Math.min(100, Math.abs(r.v) / max * 100)}%"></i></div>` : ""}</div>`).join("") || '<div class="sub">Keine Geräte gewählt</div>'}</div>`;
   }
 
+  /** Sammelt Quellen und Verbraucher automatisch aus den anderen Widgets dieser Karte (jeder Sensor nur einmal). */
+  _balanceModel(w) {
+    const ws = this._config.widgets || [];
+    const sgn = (wd, id) => (wd.signs?.[id] === -1 ? -1 : 1);
+    const roles = { solar: new Map(), grid: new Map(), battery: new Map() };
+    const seen = new Set();
+    const put = (role, wd, id, f) => { if (seen.has(id)) return; seen.add(id); roles[role].set(id, { f, wd }); };
+    for (const wd of ws.filter((x) => x.type === "flow")) {
+      const ig = wd.invert_grid ? -1 : 1, ib = wd.invert_battery ? -1 : 1;
+      this._ids(wd.solar).forEach((id) => put("solar", wd, id, sgn(wd, id)));
+      this._ids(wd.grid).forEach((id) => put("grid", wd, id, sgn(wd, id) * ig));
+      this._ids(wd.grid_export).forEach((id) => put("grid", wd, id, -sgn(wd, id) * ig));
+      this._ids(wd.battery).forEach((id) => put("battery", wd, id, sgn(wd, id) * ib));
+    }
+    for (const wd of ws.filter((x) => x.type === "battery")) {
+      const ib = wd.invert_power ? -1 : 1;
+      this._ids(wd.power).forEach((id) => put("battery", wd, id, sgn(wd, id) * ib));
+    }
+    const skip = new Set([...seen, ...this._ids(w.exclude)]);
+    const cons = new Map();
+    const addC = (wd, id) => { if (!skip.has(id) && !cons.has(id)) cons.set(id, { f: sgn(wd, id), wd }); };
+    for (const wd of ws.filter((x) => x.type === "devices")) this._ids(wd.entities).forEach((id) => addC(wd, id));
+    this._ids(w.entities).forEach((id) => addC(w, id));
+    const sum = (m) => {
+      let t = null;
+      for (const id of this._use([...m.keys()])) { const v = this._watts(id); if (v !== null) t = (t || 0) + v * m.get(id).f; }
+      return t;
+    };
+    return { solar: sum(roles.solar), grid: sum(roles.grid), bat: sum(roles.battery), roles, cons, hasSrc: seen.size > 0 };
+  }
+
   /** Energiebilanz: Zufluss (Solar + Netz − Batterie) abzüglich aller Verbraucher = nicht zugeordnet */
   _balance(w) {
-    const now = this._period === "now";
-    const solar = this._sumW(w.solar, w);
-    const imp = this._sumW(w.grid, w), exp = this._sumW(w.grid_export, w);
-    let grid = imp === null && exp === null ? null : (imp || 0) - (exp || 0);
-    if (grid !== null && w.invert_grid) grid = -grid;
-    let bat = this._sumW(w.battery, w); if (bat !== null && w.invert_battery) bat = -bat;
-    const batIn = bat === null ? null : -bat;  // Entladen = Zufluss, Laden = Abfluss
-    if (solar === null && grid === null && bat === null) return `<div class="sub">Quellen (Solar / Netz / Batterie) eintragen.</div>`;
-    const supply = (solar || 0) + (grid || 0) + (batIn || 0);
-    // jeder Sensor nur einmal: Duplikate und Sensoren, die schon als Quelle dienen, werden ignoriert
-    const src = new Set(["solar", "grid", "grid_export", "battery"].flatMap((k) => this._ids(w[k])));
-    const cons = [...new Set(this._ids(w.entities))].filter((id) => !src.has(id));
-    const rows = cons.map((id) => ({ id, v: this._sv(w, id) }));
+    const now = this._period === "now", m = this._balanceModel(w);
+    if (!m.hasSrc) return `<div class="sub">Lege ein <b>Energiefluss</b>-Widget mit Solar / Netz / Batterie an – dessen Sensoren übernimmt die Bilanz automatisch.</div>`;
+    const batIn = m.bat === null ? null : -m.bat;  // Entladen = Zufluss, Laden = Abfluss
+    const supply = (m.solar || 0) + (m.grid || 0) + (batIn || 0);
+    const rows = [...m.cons].map(([id, c]) => {
+      const raw = this._watts(id);
+      return { id, wd: c.wd, v: raw === null ? null : raw * c.f };
+    });
     const used = rows.reduce((a, r) => a + (r.v || 0), 0);
     const rest = supply - used, uncounted = rows.filter((r) => r.v === null).length;
     const tol = Math.max(Math.abs(supply) * 0.05, now ? 30 : 0.05);
@@ -252,15 +278,17 @@ class OmniBatteryDashboard extends HTMLElement {
     const row = (label, v, cls = "") => `<div class="brow ${cls}"><span>${esc(label)}</span><b>${esc(this._fmtW(v))}</b></div>`;
     const max = Math.max(1e-9, ...rows.map((r) => Math.abs(r.v || 0)));
     const sorted = [...rows].sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity));
+    const home = (this._config.widgets || []).filter((x) => x.type === "flow" && this._ids(x.home).length).map((x) => this._sumW(x.home, x)).find((v) => v !== null);
     return `<div class="bal">
       <div class="bsec">Zufluss</div>
-      ${solar !== null ? row("☀️ Solar", solar) : ""}
-      ${grid !== null ? row(grid >= 0 ? "🏭 Netzbezug" : "🏭 Einspeisung (netto)", grid) : ""}
+      ${m.solar !== null ? row("☀️ Solar", m.solar) : ""}
+      ${m.grid !== null ? row(m.grid >= 0 ? "🏭 Netzbezug" : "🏭 Einspeisung (netto)", m.grid) : ""}
       ${batIn !== null ? row(batIn >= 0 ? "🔋 Batterie entlädt" : "🔋 Batterie lädt (netto)", batIn) : ""}
       ${row("Summe verfügbar", supply, "tot")}
+      ${home !== undefined ? `<div class="sub">Gemessener Hausverbrauch (Energiefluss): ${esc(this._fmtW(home))}</div>` : ""}
       <div class="bsec">Verbraucher (${rows.length})</div>
-      ${sorted.map((r) => `<div class="brow"><span title="${esc(r.id)}">${esc(this._label(w, r.id))}</span><b>${esc(r.v === null ? "–" : this._fmtW(r.v))}</b></div>
-        ${r.v !== null ? `<div class="bar"><i style="width:${Math.min(100, Math.abs(r.v) / max * 100)}%"></i></div>` : ""}`).join("") || '<div class="sub">Noch keine Verbraucher eingetragen.</div>'}
+      ${sorted.map((r) => `<div class="brow"><span title="${esc(r.id)}">${esc(this._label(r.wd, r.id))}</span><b>${esc(r.v === null ? "–" : this._fmtW(r.v))}</b></div>
+        ${r.v !== null ? `<div class="bar"><i style="width:${Math.min(100, Math.abs(r.v) / max * 100)}%"></i></div>` : ""}`).join("") || '<div class="sub">Noch keine Verbraucher: Sensoren im <b>Geräteverbrauch</b>-Widget werden automatisch übernommen.</div>'}
       ${uncounted ? `<div class="sub">${uncounted} Zähler ohne Leistungswert sind in „Aktuell“ nicht eingerechnet (nur Tag–Jahr).</div>` : ""}
       ${row("Verbraucher gesamt", used, "tot")}
       <div class="stack"><i style="width:${pct.toFixed(1)}%"></i></div>
