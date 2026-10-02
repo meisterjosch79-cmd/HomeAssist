@@ -31,6 +31,19 @@ shell_command:
   omnibattery_update: !secret ob_update_cmd
 ```
 
+## Zeitraum-Umschalter (Aktuell / Tag / Woche / Monat / Jahr)
+Oben in der Karte (mittig) stehen die Schalter **Aktuell · Tag · Woche · Monat · Jahr**. Die Auswahl wird im Browser gemerkt.
+Tag = seit 0 Uhr, Woche = seit Montag, Monat = seit dem 1., Jahr = seit 1. Januar.
+Die Werte kommen aus den Langzeitstatistiken von Home Assistant:
+
+- **Energiezähler (kWh/Wh, z. B. „Tagesertrag“, „Gesamtenergie“)** werden exakt über die Änderung im Zeitraum berechnet.
+- **Leistungssensoren (W/kW)** werden aus dem Mittelwert × Zeit in kWh umgerechnet (Näherung; Netto bei Vorzeichen, z. B. Netz ± oder Batterie ±).
+- Du kannst in **ein Feld beides eintragen**, den Leistungs- *und* den Energiesensor: „Aktuell“ nutzt nur die Leistungssensoren, die anderen Zeiträume bevorzugt die Energiezähler.
+- Für genaue Bezug/Einspeisung-Summen trage Bezug und Einspeisung getrennt ein (Felder *Netz* und *Netz: Einspeisung*).
+- Der Sensor braucht eine `state_class` (measurement / total_increasing), sonst gibt es keine Statistik – die Karte weist darauf hin.
+- Der laufende Zeitraum hängt der aktuellen Stunde bis zu ca. 1 h hinterher (Statistik wird stündlich geschrieben); „Tag“ ist minutengenau.
+- Im Editor lässt sich der Umschalter ausblenden.
+
 ## Widgets
 | Typ | Zweck |
 |---|---|
