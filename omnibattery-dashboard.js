@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.3.0";
+const OB_VERSION = "0.4.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" },
@@ -90,6 +90,14 @@ class OmniBatteryDashboard extends HTMLElement {
     return ids;
   }
 
+  /** Anzeigename eines Sensors im Widget (eigener Name oder Entity-Name) */
+  _label(w, id) { return w.names?.[id] || this._st(id)?.attributes?.friendly_name || id; }
+  /** Kleine Einzelwerte aller Sensoren eines Widget-Feldes */
+  _parts(w, ids) {
+    ids = ids.filter(Boolean);
+    if (!ids.length || (ids.length < 2 && !ids.some((id) => w.names?.[id]))) return "";
+    return `<div class="parts">${ids.map((id) => `<div><span>${esc(this._label(w, id))}</span><b>${esc(this._fmtW(this._watts(id)))}</b></div>`).join("")}</div>`;
+  }
   _ids(v) { return Array.isArray(v) ? v : v ? [v] : []; }
   /** Summe in Watt über einen oder mehrere Sensoren (null, wenn kein Wert verfügbar) */
   _sumW(v) {
@@ -132,7 +140,7 @@ class OmniBatteryDashboard extends HTMLElement {
         <text x="60" y="68" text-anchor="middle" font-size="24" font-weight="600" fill="var(--primary-text-color)">${soc === null ? "–" : Math.round(pct) + "%"}</text>
       </svg>
       <div class="big" style="color:${col}">${this._fmtW(p === null ? null : Math.abs(p))}</div>
-      <div class="sub">${state}${kwh}</div></div>`;
+      <div class="sub">${state}${kwh}</div>${this._parts(w, this._ids(w.power))}</div>`;
   }
 
   _flow(w) {
@@ -146,16 +154,16 @@ class OmniBatteryDashboard extends HTMLElement {
     if (home === null && (solar !== null || grid !== null || bat !== null)) {
       home = Math.max(0, (solar || 0) + (grid || 0) - (bat || 0));
     }
-    const node = (icon, label, val, note, color) =>
-      `<div class="node"><div class="ni">${icon}</div><div class="nl">${label}</div><div class="nv" style="color:${color}">${this._fmtW(val === null ? null : Math.abs(val))}</div><div class="sub">${note}</div></div>`;
+    const node = (icon, label, val, note, color, parts = "") =>
+      `<div class="node"><div class="ni">${icon}</div><div class="nl">${label}</div><div class="nv" style="color:${color}">${this._fmtW(val === null ? null : Math.abs(val))}</div><div class="sub">${note}</div>${parts}</div>`;
     const gridNote = grid === null ? "" : grid > 10 ? "⬇ Netzbezug" : grid < -10 ? "⬆ Einspeisung" : "Ausgeglichen";
     const gridCol = grid > 10 ? "#c0392b" : grid < -10 ? "#2e9e5b" : "var(--secondary-text-color)";
     const hasGrid = this._ids(w.grid).length || this._ids(w.grid_export).length;
     return `<div class="flow">
-      ${this._ids(w.solar).length ? node("☀️", "Solar", solar, solar > 10 ? "Produktion" : "Keine Produktion", "#e0a800") : "<div></div>"}
-      ${hasGrid ? node("🏭", "Netz", grid, gridNote, gridCol) : "<div></div>"}
-      ${node("🏠", "Haus", home, "Verbrauch", "var(--primary-text-color)")}
-      ${this._ids(w.battery).length ? node("🔋", "Batterie", bat, bat === null ? "" : bat > 20 ? "Laden" : bat < -20 ? "Entladen" : "Leerlauf", bat > 20 ? "#2e9e5b" : bat < -20 ? "#e8833a" : "var(--secondary-text-color)") : "<div></div>"}
+      ${this._ids(w.solar).length ? node("☀️", "Solar", solar, solar > 10 ? "Produktion" : "Keine Produktion", "#e0a800", this._parts(w, this._ids(w.solar))) : "<div></div>"}
+      ${hasGrid ? node("🏭", "Netz", grid, gridNote, gridCol, this._parts(w, [...this._ids(w.grid), ...this._ids(w.grid_export)])) : "<div></div>"}
+      ${node("🏠", "Haus", home, "Verbrauch", "var(--primary-text-color)", this._parts(w, this._ids(w.home)))}
+      ${this._ids(w.battery).length ? node("🔋", "Batterie", bat, bat === null ? "" : bat > 20 ? "Laden" : bat < -20 ? "Entladen" : "Leerlauf", bat > 20 ? "#2e9e5b" : bat < -20 ? "#e8833a" : "var(--secondary-text-color)", this._parts(w, this._ids(w.battery))) : "<div></div>"}
     </div>`;
   }
 
@@ -170,7 +178,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const max = w.max || Math.max(1, ...rows.map((r) => Math.abs(r.v || 0)));
     rows.sort((a, b) => (b.v || 0) - (a.v || 0));
     return `<div class="devs">${rows.map((r) => `
-      <div class="dev"><div class="dl"><span>${esc(this._name(r.id))}</span><b>${esc(this._fmt(r.id))}</b></div>
+      <div class="dev"><div class="dl"><span>${esc(this._label(w, r.id))}</span><b>${esc(this._fmt(r.id))}</b></div>
       <div class="bar"><i style="width:${Math.min(100, Math.abs(r.v || 0) / max * 100)}%"></i></div></div>`).join("") || '<div class="sub">Keine Geräte gewählt</div>'}</div>`;
   }
 
@@ -226,6 +234,8 @@ class OmniBatteryDashboard extends HTMLElement {
       .node{background:var(--card-background-color);border-radius:10px;padding:8px;text-align:center}
       .ni{font-size:1.5em}.nl{font-size:.8em;color:var(--secondary-text-color)}.nv{font-size:1.2em;font-weight:600}
       .arrow{display:none}
+      .parts{margin-top:6px;padding-top:4px;border-top:1px solid var(--divider-color);font-size:.72em;color:var(--secondary-text-color);text-align:left}
+      .parts div{display:flex;justify-content:space-between;gap:6px}.parts span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.parts b{font-weight:500;white-space:nowrap}
       .dev{margin-bottom:8px}.dl{display:flex;justify-content:space-between;font-size:.9em;gap:8px}
       .dl span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .bar{height:6px;border-radius:3px;background:var(--divider-color);margin-top:3px}
@@ -240,7 +250,8 @@ class OmniBatteryDashboard extends HTMLElement {
 /** Entitäts-Auswahl: erst Gerät wählen, dann Sensoren inkl. aktuellem Wert sehen und auswählen. */
 class ObEntityPicker extends HTMLElement {
   constructor() { super(); this._open = false; this._device = ""; this._q = ""; }
-  set hass(h) { this._hass = h; if (this._open) this._renderList(); else if (this._built) this._renderHead(); }
+  set hass(h) { this._hass = h; if (this._open) this._renderList(); if (this._built) this._updateValues(); }
+  set names(n) { this._names = { ...(n || {}) }; if (this._built) this._renderHead(); }
   set value(v) { this._value = v; if (this._built) this._renderHead(); }
   set options(o) { this._opts = o; }  // { label, multiple, domain, classes }
 
@@ -256,17 +267,28 @@ class ObEntityPicker extends HTMLElement {
       .p button{cursor:pointer}.p .panel{border:1px solid var(--primary-color);border-radius:8px;padding:8px;margin-top:6px}
       .p .panel select,.p .panel input{width:100%;box-sizing:border-box;margin-bottom:6px}
       .p .list{max-height:300px;overflow:auto}
+      .p .ph{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+      .p .cl{cursor:pointer;padding:2px 8px;font-size:1.2em;border-radius:6px}.p .cl:hover{background:var(--secondary-background-color)}
+      .p .sel{flex-wrap:wrap}.p .sel input.nm{flex:1 1 100%;box-sizing:border-box;font-size:.85em}
       .p .it{display:flex;justify-content:space-between;gap:8px;padding:8px 6px;border-bottom:1px solid var(--divider-color);cursor:pointer}
       .p .it:hover{background:var(--secondary-background-color)}
       .p .it .n{min-width:0}.p .it small{display:block;color:var(--secondary-text-color);overflow:hidden;text-overflow:ellipsis}
       .p .it .v{white-space:nowrap;font-weight:600}
     </style><div class="p"><div class="lb"></div><div class="head"></div><div class="panel" hidden>
+      <div class="ph"><b>Sensor auswählen</b><span class="cl" title="Schließen">✕</span></div>
       <select class="dev"></select><input class="q" placeholder="Durchsuchen …"><div class="list"></div></div></div>`;
     this.querySelector(".lb").textContent = this._opts?.label || "";
+    this.querySelector(".cl").addEventListener("click", () => this._toggle(false));
     this.querySelector(".dev").addEventListener("change", (e) => { this._device = e.target.value; this._renderList(); });
     this.querySelector(".q").addEventListener("input", (e) => { this._q = e.target.value.toLowerCase(); this._renderList(); });
     this.querySelector(".list").addEventListener("click", (e) => {
       const it = e.target.closest(".it"); if (it) this._pick(it.dataset.id);
+    });
+    this.querySelector(".head").addEventListener("input", (e) => {
+      const id = e.target.dataset?.nm; if (!id) return;
+      this._names ||= {};
+      if (e.target.value) this._names[id] = e.target.value; else delete this._names[id];
+      this.dispatchEvent(new CustomEvent("renamed", { detail: { id, name: e.target.value } }));
     });
     this.querySelector(".head").addEventListener("click", (e) => {
       const t = e.target;
@@ -316,10 +338,15 @@ class ObEntityPicker extends HTMLElement {
   _renderHead() {
     const h = this.querySelector(".head"); if (!h) return;
     const rows = this._arr().map((id) => `<div class="sel"><div class="n">${esc(this._entName(id))} <small>${esc(this._devName(id))}</small></div>
-      <span class="v">${esc(this._val(id))}</span><span class="x" data-rm="${esc(id)}" title="Entfernen">✕</span></div>`).join("");
+      <span class="v" data-v="${esc(id)}">${esc(this._val(id))}</span><span class="x" data-rm="${esc(id)}" title="Entfernen">✕</span>
+      <input class="nm" data-nm="${esc(id)}" placeholder="Anzeigename (optional)" value="${esc(this._names?.[id] || "")}"></div>`).join("");
     h.innerHTML = rows + (this._opts.multiple || !this._arr().length
       ? `<button data-open>${this._opts.multiple ? "+ Sensor hinzufügen" : "Sensor auswählen …"}</button>`
       : `<button data-open>Ändern …</button>`);
+  }
+
+  _updateValues() {
+    this.querySelectorAll("[data-v]").forEach((el) => { el.textContent = this._val(el.dataset.v); });
   }
 
   _fillDevices() {
@@ -401,7 +428,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
         this._config.widgets = this._config.widgets.map((x, j) => {
           if (j !== i) return x;
           const nw = { ...x, ...patch };
-          for (const k of Object.keys(nw)) if (nw[k] === "" || nw[k] === undefined || (Array.isArray(nw[k]) && !nw[k].length)) delete nw[k];
+          for (const k of Object.keys(nw)) if (nw[k] === "" || nw[k] === undefined || (Array.isArray(nw[k]) && !nw[k].length) || (k === "names" && !Object.keys(nw[k]).length)) delete nw[k];
           return nw;
         });
         this._emit();
@@ -420,6 +447,13 @@ class OmniBatteryDashboardEditor extends HTMLElement {
         const pk = document.createElement("ob-entity-picker");
         pk.options = { label: LABELS[f.name] || f.name, multiple: f.multiple, domain: f.domain, classes: f.classes };
         pk.value = w[f.name];
+        pk.names = w.names;
+        pk.addEventListener("renamed", (ev) => {
+          ev.stopPropagation();
+          const names = { ...(this._config.widgets[i].names || {}) };
+          if (ev.detail.name) names[ev.detail.id] = ev.detail.name; else delete names[ev.detail.id];
+          upd({ names });
+        });
         pk.hass = this._hass;
         pk.addEventListener("picked", (ev) => { ev.stopPropagation(); upd({ [f.name]: ev.detail.value }); });
         d.appendChild(pk);
