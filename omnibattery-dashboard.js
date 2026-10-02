@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.5.1";
+const OB_VERSION = "0.6.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -417,7 +417,9 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       <label><input type="checkbox" id="flt" ${this._filterOn === false ? "" : "checked"}> Sensorliste vorfiltern (Leistung / Batterie)</label>
       <div id="list"></div>
       <div class="row"><select id="newtype">${Object.entries(WIDGET_TYPES).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join("")}</select>
-        <button id="add">+ Widget hinzufügen</button></div></div>`;
+        <button id="add">+ Widget hinzufügen</button></div>
+      <div class="row" style="opacity:.8;font-size:.85em">Version ${OB_VERSION} <button id="reload">↻ Neu laden</button></div></div>`;
+    this.querySelector("#reload").addEventListener("click", () => location.reload());
     this.querySelector("#title").addEventListener("input", (e) => { this._config.title = e.target.value; this._emit(); });
     this.querySelector("#flt").addEventListener("change", (e) => { this._filterOn = e.target.checked; this._build(); });
     this.querySelector("#add").addEventListener("click", () => {
@@ -483,9 +485,10 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   }
 }
 
-customElements.define("ob-entity-picker", ObEntityPicker);
-customElements.define("omnibattery-dashboard", OmniBatteryDashboard);
-customElements.define("omnibattery-dashboard-editor", OmniBatteryDashboardEditor);
+const defineOnce = (n, c) => { if (!customElements.get(n)) customElements.define(n, c); };
+defineOnce("ob-entity-picker", ObEntityPicker);
+defineOnce("omnibattery-dashboard", OmniBatteryDashboard);
+defineOnce("omnibattery-dashboard-editor", OmniBatteryDashboardEditor);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "omnibattery-dashboard",

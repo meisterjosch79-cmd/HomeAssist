@@ -21,3 +21,9 @@ Alle Widgets werden im **visuellen Editor der Karte** (Config-Seite) eingestellt
 
 Vorzeichen: Netz `+` = Bezug, Batterie `+` = Laden – per Schalter umkehrbar. kW/W werden automatisch erkannt.
 Siehe `example-dashboard.yaml`. Neue Widget-Typen lassen sich in `omnibattery-dashboard.js` leicht ergänzen.
+
+## Updates ohne Versionsnummer hochzählen
+1. `energy-loader.js` einmalig als `/config/www/energy.js` speichern und als Ressource
+   (`/local/energy.js`, Typ JavaScript-Modul) eintragen. Den Loader musst du nie wieder ändern.
+2. `omnibattery-dashboard.js` unverändert (gleicher Dateiname) nach `/config/www/` legen.
+3. Bei einem Update nur `omnibattery-dashboard.js` überschreiben und die Seite neu laden (F5).
