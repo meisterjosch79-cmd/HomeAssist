@@ -3,14 +3,14 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.4.0";
+const OB_VERSION = "0.5.0";
 
 const WIDGET_TYPES = {
-  battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" },
-  flow: { label: "Energiefluss (Solar / Netz / Batterie / Haus)", icon: "⚡" },
-  value: { label: "Einzelwert", icon: "🔢" },
-  devices: { label: "Geräteverbrauch (Liste)", icon: "🔌" },
-  history: { label: "Verlauf (Diagramm)", icon: "📈" },
+  battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
+  flow: { label: "Energiefluss (Solar / Netz / Batterie / Haus)", icon: "⚡" , short: "Energiefluss" },
+  value: { label: "Einzelwert", icon: "🔢" , short: "Wert" },
+  devices: { label: "Geräteverbrauch (Liste)", icon: "🔌" , short: "Geräte" },
+  history: { label: "Verlauf (Diagramm)", icon: "📈" , short: "Verlauf" },
 };
 
 const LABELS = {
@@ -93,10 +93,10 @@ class OmniBatteryDashboard extends HTMLElement {
   /** Anzeigename eines Sensors im Widget (eigener Name oder Entity-Name) */
   _label(w, id) { return w.names?.[id] || this._st(id)?.attributes?.friendly_name || id; }
   /** Kleine Einzelwerte aller Sensoren eines Widget-Feldes */
-  _parts(w, ids) {
+  _parts(w, ids, always = false) {
     ids = ids.filter(Boolean);
-    if (!ids.length || (ids.length < 2 && !ids.some((id) => w.names?.[id]))) return "";
-    return `<div class="parts">${ids.map((id) => `<div><span>${esc(this._label(w, id))}</span><b>${esc(this._fmtW(this._watts(id)))}</b></div>`).join("")}</div>`;
+    if (!ids.length || (!always && ids.length < 2 && !ids.some((id) => w.names?.[id]))) return "";
+    return `<div class="parts">${ids.map((id) => `<div><span title="${esc(id)}">${esc(this._label(w, id))}</span><b>${esc(this._fmtW(this._watts(id)))}</b></div>`).join("")}</div>`;
   }
   _ids(v) { return Array.isArray(v) ? v : v ? [v] : []; }
   /** Summe in Watt über einen oder mehrere Sensoren (null, wenn kein Wert verfügbar) */
@@ -133,7 +133,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const r = 52, c = 2 * Math.PI * r;
     const kwh = soc !== null && w.capacity_kwh ? ` · ${(w.capacity_kwh * pct / 100).toFixed(2)} kWh` : "";
     return `<div class="batt">
-      <svg viewBox="0 0 120 120" width="130" height="130">
+      <svg viewBox="0 0 120 120" style="width:100%;max-width:130px">
         <circle cx="60" cy="60" r="${r}" fill="none" stroke="var(--divider-color)" stroke-width="10"/>
         <circle cx="60" cy="60" r="${r}" fill="none" stroke="${col === "var(--secondary-text-color)" ? "var(--primary-color)" : col}" stroke-width="10"
           stroke-linecap="round" stroke-dasharray="${(c * pct / 100).toFixed(1)} ${c}" transform="rotate(-90 60 60)"/>
@@ -155,15 +155,18 @@ class OmniBatteryDashboard extends HTMLElement {
       home = Math.max(0, (solar || 0) + (grid || 0) - (bat || 0));
     }
     const node = (icon, label, val, note, color, parts = "") =>
-      `<div class="node"><div class="ni">${icon}</div><div class="nl">${label}</div><div class="nv" style="color:${color}">${this._fmtW(val === null ? null : Math.abs(val))}</div><div class="sub">${note}</div>${parts}</div>`;
+      `<div class="node" style="--c:${color}"><div class="nh"><span class="ni">${icon}</span>
+        <div class="nt"><div class="nl">${label}</div><div class="sub">${note}</div></div>
+        <div class="nv">${this._fmtW(val === null ? null : Math.abs(val))}</div></div>${parts}</div>`;
     const gridNote = grid === null ? "" : grid > 10 ? "⬇ Netzbezug" : grid < -10 ? "⬆ Einspeisung" : "Ausgeglichen";
     const gridCol = grid > 10 ? "#c0392b" : grid < -10 ? "#2e9e5b" : "var(--secondary-text-color)";
-    const hasGrid = this._ids(w.grid).length || this._ids(w.grid_export).length;
+    const gridIds = [...this._ids(w.grid), ...this._ids(w.grid_export)];
+    const P = (ids) => this._parts(w, ids, true);
     return `<div class="flow">
-      ${this._ids(w.solar).length ? node("☀️", "Solar", solar, solar > 10 ? "Produktion" : "Keine Produktion", "#e0a800", this._parts(w, this._ids(w.solar))) : "<div></div>"}
-      ${hasGrid ? node("🏭", "Netz", grid, gridNote, gridCol, this._parts(w, [...this._ids(w.grid), ...this._ids(w.grid_export)])) : "<div></div>"}
-      ${node("🏠", "Haus", home, "Verbrauch", "var(--primary-text-color)", this._parts(w, this._ids(w.home)))}
-      ${this._ids(w.battery).length ? node("🔋", "Batterie", bat, bat === null ? "" : bat > 20 ? "Laden" : bat < -20 ? "Entladen" : "Leerlauf", bat > 20 ? "#2e9e5b" : bat < -20 ? "#e8833a" : "var(--secondary-text-color)", this._parts(w, this._ids(w.battery))) : "<div></div>"}
+      ${this._ids(w.solar).length ? node("☀️", "Solar", solar, solar > 10 ? "Produktion" : "Keine Produktion", "#e0a800", P(this._ids(w.solar))) : ""}
+      ${gridIds.length ? node("🏭", "Netz", grid, gridNote, gridCol, P(gridIds)) : ""}
+      ${this._ids(w.battery).length ? node("🔋", "Batterie", bat, bat === null ? "" : bat > 20 ? "Laden" : bat < -20 ? "Entladen" : "Leerlauf", bat > 20 ? "#2e9e5b" : bat < -20 ? "#e8833a" : "var(--secondary-text-color)", P(this._ids(w.battery))) : ""}
+      ${node("🏠", "Haus", home, "Verbrauch", "var(--primary-color)", P(this._ids(w.home)))}
     </div>`;
   }
 
@@ -215,35 +218,38 @@ class OmniBatteryDashboard extends HTMLElement {
     if (!this._config) return;
     const body = (this._config.widgets || []).map((w) => {
       const fn = this["_" + w.type];
-      const title = w.name || (w.entity ? this._name(w.entity) : WIDGET_TYPES[w.type]?.label || "");
-      return `<section class="w" style="grid-column: span ${Math.min(4, Math.max(1, w.width || 1))}">
+      const title = w.name || (w.entity ? this._name(w.entity) : WIDGET_TYPES[w.type]?.short || "");
+      const span = Math.min(4, Math.max(1, w.width || 1));
+      return `<section class="w" data-w="${span}" style="grid-column: span ${span}">
         <h3>${esc(title)}</h3>${fn ? fn.call(this, w) : `<div class="sub">Unbekannter Typ: ${esc(w.type)}</div>`}</section>`;
     }).join("");
     this.shadowRoot.innerHTML = `<style>
       :host{display:block}
       ha-card{padding:16px}
       .title{font-size:1.3em;font-weight:600;margin-bottom:12px}
+      .wrap{container-type:inline-size}
       .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-      @media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.w{grid-column:span 2!important}}
-      @media(max-width:520px){.grid{grid-template-columns:1fr}.w{grid-column:span 1!important}}
+      @container (max-width:900px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.w[data-w="3"],.w[data-w="4"]{grid-column:span 2!important}}
+      @container (max-width:560px){.grid{grid-template-columns:minmax(0,1fr)}.w{grid-column:span 1!important}}
       .w{background:var(--secondary-background-color);border-radius:12px;padding:12px;min-width:0}
       h3{margin:0 0 8px;font-size:.95em;font-weight:500;color:var(--secondary-text-color)}
       .big{font-size:1.6em;font-weight:600}.sub{font-size:.85em;color:var(--secondary-text-color)}
       .batt{text-align:center}.val{display:flex;align-items:center;gap:10px}
-      .flow{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
-      .node{background:var(--card-background-color);border-radius:10px;padding:8px;text-align:center}
-      .ni{font-size:1.5em}.nl{font-size:.8em;color:var(--secondary-text-color)}.nv{font-size:1.2em;font-weight:600}
-      .arrow{display:none}
-      .parts{margin-top:6px;padding-top:4px;border-top:1px solid var(--divider-color);font-size:.72em;color:var(--secondary-text-color);text-align:left}
-      .parts div{display:flex;justify-content:space-between;gap:6px}.parts span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.parts b{font-weight:500;white-space:nowrap}
+      .flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
+      .node{background:var(--card-background-color);border-radius:10px;padding:10px 12px;border-left:4px solid var(--c);min-width:0}
+      .nh{display:flex;align-items:center;gap:10px}.ni{font-size:1.6em;line-height:1}
+      .nt{flex:1;min-width:0}.nl{font-weight:500}.nv{font-size:1.25em;font-weight:700;color:var(--c);white-space:nowrap}
+      .parts{margin-top:8px;padding-top:6px;border-top:1px solid var(--divider-color);font-size:.8em;color:var(--secondary-text-color)}
+      .parts div{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+      .parts span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.parts b{font-weight:500;color:var(--primary-text-color);white-space:nowrap}
       .dev{margin-bottom:8px}.dl{display:flex;justify-content:space-between;font-size:.9em;gap:8px}
       .dl span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .bar{height:6px;border-radius:3px;background:var(--divider-color);margin-top:3px}
       .bar i{display:block;height:100%;border-radius:3px;background:var(--primary-color)}
       .hist{width:100%;height:90px}
     </style>
-    <ha-card>${this._config.title ? `<div class="title">${esc(this._config.title)}</div>` : ""}
-      <div class="grid">${body || '<div class="sub">Noch keine Widgets – Karte bearbeiten und Widgets hinzufügen.</div>'}</div></ha-card>`;
+    <ha-card><div class="wrap">${this._config.title ? `<div class="title">${esc(this._config.title)}</div>` : ""}
+      <div class="grid">${body || '<div class="sub">Noch keine Widgets – Karte bearbeiten und Widgets hinzufügen.</div>'}</div></div></ha-card>`;
   }
 }
 
