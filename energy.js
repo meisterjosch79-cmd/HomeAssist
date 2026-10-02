@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.12.1";
+const OB_VERSION = "0.13.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -54,6 +54,8 @@ const SCHEMAS = {
   history: [NAME, ENT("entity"), { name: "hours", selector: { number: { min: 1, max: 168, mode: "box" } } }, WIDTH],
 };
 
+// Virtueller Sensor: "Nicht zugeordnete Energiemenge" aus der Energiebilanz, nutzbar in Geräteliste und Hausverbrauch
+const VIRT = "virtual:unassigned", VIRT_NAME = "Nicht zugeordnete Energiemenge";
 const PERIODS = { now: "Aktuell", day: "Tag", week: "Woche", month: "Monat", year: "Jahr" };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -105,7 +107,7 @@ class OmniBatteryDashboard extends HTMLElement {
   }
 
   /** Anzeigename eines Sensors im Widget (eigener Name oder Entity-Name) */
-  _label(w, id) { return w.names?.[id] || this._st(id)?.attributes?.friendly_name || id; }
+  _label(w, id) { return w.names?.[id] || (id === VIRT ? VIRT_NAME + " (virtuell)" : null) || this._st(id)?.attributes?.friendly_name || id; }
   /** Kleine Einzelwerte aller Sensoren eines Widget-Feldes */
   _parts(w, ids, always = false) {
     ids = ids.filter(Boolean);
@@ -120,9 +122,9 @@ class OmniBatteryDashboard extends HTMLElement {
   /** Sensoren eines Feldes, die im aktuellen Zeitraum zählen:
    *  Aktuell = nur Leistungssensoren; Tag/Woche/Monat/Jahr = Energiezähler, sonst Leistung (Statistik-Mittelwert × Zeit). */
   _use(v) {
-    const ids = this._ids(v), en = ids.filter((i) => this._isEnergy(i));
+    const ids = this._ids(v), en = ids.filter((i) => this._isEnergy(i)), virt = ids.filter((i) => i === VIRT);
     if (this._period === "now") return ids.filter((i) => !this._isEnergy(i));
-    return en.length ? en : ids;
+    return en.length ? [...en, ...virt] : ids;
   }
   /** Summe in Watt über einen oder mehrere Sensoren (null, wenn kein Wert verfügbar) */
   _sumW(v, wd) {
@@ -139,6 +141,7 @@ class OmniBatteryDashboard extends HTMLElement {
   _num(id) { const s = this._st(id); const v = s ? parseFloat(s.state) : NaN; return isNaN(v) ? null : v; }
   /** Wert in Watt, berücksichtigt kW/MW */
   _watts(id) {
+    if (id === VIRT) return this._unassigned();
     if (this._period !== "now") return this._stat?.[this._period]?.[id] ?? null;  // kWh aus Statistik
     if (this._isEnergy(id)) return null;
     const v = this._num(id); if (v === null) return null;
@@ -249,7 +252,7 @@ class OmniBatteryDashboard extends HTMLElement {
       const ib = wd.invert_power ? -1 : 1;
       this._ids(wd.power).forEach((id) => put("battery", wd, id, sgn(wd, id) * ib));
     }
-    const skip = new Set([...seen, ...this._ids(w.exclude)]);
+    const skip = new Set([...seen, ...this._ids(w.exclude), VIRT]);
     const cons = new Map();
     const addC = (wd, id) => { if (!skip.has(id) && !cons.has(id)) cons.set(id, { f: sgn(wd, id), wd }); };
     for (const wd of ws.filter((x) => x.type === "devices")) this._ids(wd.entities).forEach((id) => addC(wd, id));
@@ -262,10 +265,10 @@ class OmniBatteryDashboard extends HTMLElement {
     return { solar: sum(roles.solar), grid: sum(roles.grid), bat: sum(roles.battery), roles, cons, hasSrc: seen.size > 0 };
   }
 
-  /** Energiebilanz: Zufluss (Solar + Netz − Batterie) abzüglich aller Verbraucher = nicht zugeordnet */
-  _balance(w) {
-    const now = this._period === "now", m = this._balanceModel(w);
-    if (!m.hasSrc) return `<div class="sub">Lege ein <b>Energiefluss</b>-Widget mit Solar / Netz / Batterie an – dessen Sensoren übernimmt die Bilanz automatisch.</div>`;
+  /** Rechnet die Bilanz aus (Zufluss, Verbraucher, Rest); null ohne Quellen */
+  _balanceCalc(w) {
+    const m = this._balanceModel(w);
+    if (!m.hasSrc) return null;
     const batIn = m.bat === null ? null : -m.bat;  // Entladen = Zufluss, Laden = Abfluss
     const supply = (m.solar || 0) + (m.grid || 0) + (batIn || 0);
     const rows = [...m.cons].map(([id, c]) => {
@@ -273,7 +276,20 @@ class OmniBatteryDashboard extends HTMLElement {
       return { id, wd: c.wd, v: raw === null ? null : raw * c.f };
     });
     const used = rows.reduce((a, r) => a + (r.v || 0), 0);
-    const rest = supply - used, uncounted = rows.filter((r) => r.v === null).length;
+    return { m, batIn, supply, rows, used, rest: supply - used };
+  }
+  /** Wert des virtuellen Sensors „nicht zugeordnet“ (W bzw. kWh) */
+  _unassigned() {
+    const bw = (this._config.widgets || []).find((x) => x.type === "balance") || {};
+    return this._balanceCalc(bw)?.rest ?? null;
+  }
+
+  /** Energiebilanz: Zufluss (Solar + Netz − Batterie) abzüglich aller Verbraucher = nicht zugeordnet */
+  _balance(w) {
+    const now = this._period === "now", c = this._balanceCalc(w);
+    if (!c) return `<div class="sub">Lege ein <b>Energiefluss</b>-Widget mit Solar / Netz / Batterie an – dessen Sensoren übernimmt die Bilanz automatisch.</div>`;
+    const { m, batIn, supply, rows, used, rest } = c;
+    const uncounted = rows.filter((r) => r.v === null).length;
     const tol = Math.max(Math.abs(supply) * 0.05, now ? 30 : 0.05);
     const col = rest < -tol ? "#c0392b" : Math.abs(rest) <= tol ? "#2e9e5b" : "#e8833a";
     const pct = supply > 0 ? Math.min(100, Math.max(0, used / supply * 100)) : 0;
@@ -356,6 +372,7 @@ class OmniBatteryDashboard extends HTMLElement {
     for (const w of this._config.widgets || [])
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities"]) this._use(w[k]).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.entities).forEach((i) => ids.add(i));
+    ids.delete(VIRT);
     if (!ids.size) return;
     this._statBusy = true; this._loading = !this._stat[p]; if (this._loading) this._render();
     const T = (v) => (typeof v === "number" ? v : Date.parse(v));
@@ -546,16 +563,19 @@ class ObEntityPicker extends HTMLElement {
   }
 
   _val(id) {
+    if (id === VIRT) return "berechnet";
     const st = this._hass?.states?.[id]; if (!st) return "n/a";
     try { if (this._hass.formatEntityState) return this._hass.formatEntityState(st); } catch (e) { /* fallback */ }
     return `${st.state} ${st.attributes.unit_of_measurement || ""}`.trim();
   }
   _devName(id) {
+    if (id === VIRT) return "Virtuell";
     const did = this._hass?.entities?.[id]?.device_id;
     const d = did && this._hass.devices?.[did];
     return d ? d.name_by_user || d.name || did : "";
   }
   _entName(id) {
+    if (id === VIRT) return VIRT_NAME;
     const n = this._hass?.states?.[id]?.attributes?.friendly_name || id;
     const dn = this._devName(id);
     return dn && n.startsWith(dn + " ") ? n.slice(dn.length + 1) : n;
@@ -568,7 +588,10 @@ class ObEntityPicker extends HTMLElement {
   }
   _candidates() {
     const o = this._all ? {} : this._opts || {}, st = this._hass?.states || {};
-    return Object.keys(st).filter((id) => {
+    const list = Object.keys(st);
+    if (this._opts?.virtual && this._minW == null) list.unshift(VIRT);
+    return list.filter((id) => {
+      if (id === VIRT) return true;
       if (o.domain && !id.startsWith(o.domain + ".")) return false;
       const a = st[id].attributes;
       if (this._minW != null) { const w = this._wattsOf(id); if (w === null || w < this._minW) return false; }
@@ -703,7 +726,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       d.appendChild(form);
       for (const f of fields.filter((x) => x.isEnt)) {
         const pk = document.createElement("ob-entity-picker");
-        pk.options = { label: LABELS_T[w.type]?.[f.name] || LABELS[f.name] || f.name, multiple: f.multiple, domain: f.domain, classes: f.classes, units: f.units };
+        pk.options = { virtual: f.name === "home" || (f.name === "entities" && w.type === "devices"), label: LABELS_T[w.type]?.[f.name] || LABELS[f.name] || f.name, multiple: f.multiple, domain: f.domain, classes: f.classes, units: f.units };
         pk.value = w[f.name];
         pk.names = w.names;
         pk.signs = w.signs;

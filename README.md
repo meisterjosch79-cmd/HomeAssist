@@ -55,6 +55,12 @@ Das Feld **Leistung** (Batterie-Widget) bzw. **Batterie** (Energiefluss) addiert
 
 „Wert abziehen“ gibt es bei jedem Feld mit mehreren Sensoren, z. B. auch beim Hausverbrauch.
 
+## Virtueller Sensor „Nicht zugeordnete Energiemenge“
+Im Auswahldialog der Felder **Geräte** (Geräteverbrauch-Widget) und **Hausverbrauch** (Energiefluss) steht ganz oben der Eintrag
+**„Nicht zugeordnete Energiemenge (Virtuell)“**. Er liefert den Rest aus der Energiebilanz (Zufluss minus alle Verbraucher aus den Geräteverbrauch-Widgets)
+und lässt sich wie ein normaler Sensor in Listen anzeigen und zur Hausverbrauch-Summe addieren. Er funktioniert in allen Zeiträumen (W bzw. kWh).
+Er zählt selbst nicht als Verbraucher der Bilanz, damit keine Rückkopplung entsteht.
+
 ## Widgets
 | Typ | Zweck |
 |---|---|
