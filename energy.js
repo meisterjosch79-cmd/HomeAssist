@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.8.1";
+const OB_VERSION = "0.9.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -15,10 +15,10 @@ const WIDGET_TYPES = {
 
 const LABELS = {
   type: "Typ", width: "Breite (1-4 Spalten)", name: "Name", soc: "Ladestand (SOC) Entität",
-  power: "Leistung (mehrere Sensoren werden addiert)", invert_power: "Vorzeichen umkehren (Standard: + = Laden)",
+  power: "Leistung (+ = Laden; Entlade-Sensor mit „abziehen“ markieren)", invert_power: "Vorzeichen umkehren (Standard: + = Laden)",
   capacity_kwh: "Kapazität (kWh, optional)", solar: "Solarproduktion (mehrere Sensoren werden addiert)",
   grid: "Netz: Leistung (+ = Bezug) bzw. Bezug-Sensor", grid_export: "Netz: Einspeisung-Sensor (optional, separater Sensor)",
-  battery: "Batterie (+ = Laden, mehrere werden addiert)",
+  battery: "Batterie (+ = Laden; Entlade-Sensor mit „abziehen“ markieren)",
   home: "Hausverbrauch (mehrere Sensoren werden addiert; leer = berechnen)",
   invert_grid: "Netz-Vorzeichen umkehren (wenn Einspeisung als Bezug angezeigt wird)", invert_battery: "Batterie-Vorzeichen umkehren",
   entity: "Entität", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte / Entitäten",
@@ -106,7 +106,7 @@ class OmniBatteryDashboard extends HTMLElement {
   _parts(w, ids, always = false) {
     ids = ids.filter(Boolean);
     if (!ids.length || (!always && ids.length < 2 && !ids.some((id) => w.names?.[id]))) return "";
-    return `<div class="parts">${ids.map((id) => `<div><span title="${esc(id)}">${esc(this._label(w, id))}</span><b>${esc(this._fmtW(this._watts(id)))}</b></div>`).join("")}</div>`;
+    return `<div class="parts">${ids.map((id) => `<div><span title="${esc(id)}">${esc(this._label(w, id))}</span><b>${esc((w.signs?.[id] === -1 ? "− " : "") + this._fmtW(this._watts(id)))}</b></div>`).join("")}</div>`;
   }
   _ids(v) { return Array.isArray(v) ? v : v ? [v] : []; }
   _isEnergy(id) {
@@ -121,10 +121,15 @@ class OmniBatteryDashboard extends HTMLElement {
     return en.length ? en : ids;
   }
   /** Summe in Watt über einen oder mehrere Sensoren (null, wenn kein Wert verfügbar) */
-  _sumW(v) {
+  _sumW(v, wd) {
     let sum = null;
-    for (const id of this._use(v)) { const w = this._watts(id); if (w !== null) sum = (sum || 0) + w; }
+    for (const id of this._use(v)) { const w = this._sv(wd, id); if (w !== null) sum = (sum || 0) + w; }
     return sum;
+  }
+  /** Sensorwert mit Vorzeichen-Einstellung des Widgets ("abziehen" = ×−1, z. B. separater Entlade-Sensor) */
+  _sv(wd, id) {
+    const v = this._watts(id);
+    return v === null ? null : wd?.signs?.[id] === -1 ? -v : v;
   }
   _st(id) { return id ? this._hass?.states?.[id] : undefined; }
   _num(id) { const s = this._st(id); const v = s ? parseFloat(s.state) : NaN; return isNaN(v) ? null : v; }
@@ -154,7 +159,7 @@ class OmniBatteryDashboard extends HTMLElement {
   // ---------- Widgets ----------
   _battery(w) {
     const soc = this._num(w.soc);
-    let p = this._sumW(w.power);
+    let p = this._sumW(w.power, w);
     if (p !== null && w.invert_power) p = -p;
     const now = this._period === "now", th = now ? 20 : 0.005;
     const state = p === null ? "" : p > th ? (now ? "Laden" : "Netto geladen") : p < -th ? (now ? "Entladen" : "Netto entladen") : now ? "Leerlauf" : "";
@@ -174,13 +179,13 @@ class OmniBatteryDashboard extends HTMLElement {
   }
 
   _flow(w) {
-    const solar = this._sumW(w.solar);
-    const imp = this._sumW(w.grid), exp = this._sumW(w.grid_export);
+    const solar = this._sumW(w.solar, w);
+    const imp = this._sumW(w.grid, w), exp = this._sumW(w.grid_export, w);
     // Netto: + = Bezug, - = Einspeisung. Mit separatem Einspeise-Sensor: Bezug - Einspeisung.
     let grid = imp === null && exp === null ? null : (imp || 0) - (exp || 0);
     if (grid !== null && w.invert_grid) grid = -grid;
-    let bat = this._sumW(w.battery); if (bat !== null && w.invert_battery) bat = -bat;
-    let home = this._sumW(w.home);
+    let bat = this._sumW(w.battery, w); if (bat !== null && w.invert_battery) bat = -bat;
+    let home = this._sumW(w.home, w);
     if (home === null && (solar !== null || grid !== null || bat !== null)) {
       home = Math.max(0, (solar || 0) + (grid || 0) - (bat || 0));
     }
@@ -209,7 +214,7 @@ class OmniBatteryDashboard extends HTMLElement {
   }
 
   _devices(w) {
-    const rows = this._use(w.entities || []).map((id) => ({ id, v: this._watts(id) }));
+    const rows = this._use(w.entities || []).map((id) => ({ id, v: this._sv(w, id) }));
     const max = w.max || Math.max(1, ...rows.map((r) => Math.abs(r.v || 0)));
     rows.sort((a, b) => (b.v || 0) - (a.v || 0));
     return `<div class="devs">${rows.map((r) => `
@@ -374,6 +379,7 @@ class OmniBatteryDashboard extends HTMLElement {
 class ObEntityPicker extends HTMLElement {
   constructor() { super(); this._open = false; this._device = ""; this._q = ""; }
   set hass(h) { this._hass = h; if (this._open) this._renderList(); if (this._built) this._updateValues(); }
+  set signs(g) { this._signs = { ...(g || {}) }; if (this._built) this._renderHead(); }
   set names(n) { this._names = { ...(n || {}) }; if (this._built) this._renderHead(); }
   set value(v) { this._value = v; if (this._built) this._renderHead(); }
   set options(o) { this._opts = o; }  // { label, multiple, domain, classes }
@@ -393,7 +399,8 @@ class ObEntityPicker extends HTMLElement {
       .p [hidden]{display:none!important}.p .all{display:block;font-size:.85em;margin:0 0 6px}.p .all input{width:auto;margin:0 6px 0 0}
       .p .ph{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
       .p .cl{cursor:pointer;padding:2px 8px;font-size:1.2em;border-radius:6px}.p .cl:hover{background:var(--secondary-background-color)}
-      .p .sel{flex-wrap:wrap}.p .sel input.nm{flex:1 1 100%;box-sizing:border-box;font-size:.85em}
+      .p .sel{flex-wrap:wrap}.p .sg{flex:1 1 100%;font-size:.85em}.p .sg input{width:auto;margin-right:6px}
+      .p .sel input.nm{flex:1 1 100%;box-sizing:border-box;font-size:.85em}
       .p .it{display:flex;justify-content:space-between;gap:8px;padding:8px 6px;border-bottom:1px solid var(--divider-color);cursor:pointer}
       .p .it:hover{background:var(--secondary-background-color)}
       .p .it .n{min-width:0}.p .it small{display:block;color:var(--secondary-text-color);overflow:hidden;text-overflow:ellipsis}
@@ -409,6 +416,12 @@ class ObEntityPicker extends HTMLElement {
     this.querySelector(".q").addEventListener("input", (e) => { this._q = e.target.value.toLowerCase(); this._renderList(); });
     this.querySelector(".list").addEventListener("click", (e) => {
       const it = e.target.closest(".it"); if (it) this._pick(it.dataset.id);
+    });
+    this.querySelector(".head").addEventListener("change", (e) => {
+      const id = e.target.dataset?.sg; if (!id) return;
+      this._signs ||= {};
+      if (e.target.checked) this._signs[id] = -1; else delete this._signs[id];
+      this.dispatchEvent(new CustomEvent("signed", { detail: { id, neg: e.target.checked } }));
     });
     this.querySelector(".head").addEventListener("input", (e) => {
       const id = e.target.dataset?.nm; if (!id) return;
@@ -466,7 +479,8 @@ class ObEntityPicker extends HTMLElement {
     const h = this.querySelector(".head"); if (!h) return;
     const rows = this._arr().map((id) => `<div class="sel"><div class="n">${esc(this._entName(id))} <small>${esc(this._devName(id))}</small></div>
       <span class="v" data-v="${esc(id)}">${esc(this._val(id))}</span><span class="x" data-rm="${esc(id)}" title="Entfernen">✕</span>
-      <input class="nm" data-nm="${esc(id)}" placeholder="Anzeigename (optional)" value="${esc(this._names?.[id] || "")}"></div>`).join("");
+      <input class="nm" data-nm="${esc(id)}" placeholder="Anzeigename (optional)" value="${esc(this._names?.[id] || "")}">
+      ${this._opts.multiple ? `<label class="sg"><input type="checkbox" data-sg="${esc(id)}" ${this._signs?.[id] === -1 ? "checked" : ""}> Wert abziehen (−), z. B. separater Entlade-Sensor</label>` : ""}</div>`).join("");
     h.innerHTML = rows + (this._opts.multiple || !this._arr().length
       ? `<button data-open>${this._opts.multiple ? "+ Sensor hinzufügen" : "Sensor auswählen …"}</button>`
       : `<button data-open>Ändern …</button>`);
@@ -570,7 +584,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
         this._config.widgets = this._config.widgets.map((x, j) => {
           if (j !== i) return x;
           const nw = { ...x, ...patch };
-          for (const k of Object.keys(nw)) if (nw[k] === "" || nw[k] === undefined || (Array.isArray(nw[k]) && !nw[k].length) || (k === "names" && !Object.keys(nw[k]).length)) delete nw[k];
+          for (const k of Object.keys(nw)) if (nw[k] === "" || nw[k] === undefined || (Array.isArray(nw[k]) && !nw[k].length) || ((k === "names" || k === "signs") && !Object.keys(nw[k]).length)) delete nw[k];
           return nw;
         });
         this._emit();
@@ -590,6 +604,13 @@ class OmniBatteryDashboardEditor extends HTMLElement {
         pk.options = { label: LABELS[f.name] || f.name, multiple: f.multiple, domain: f.domain, classes: f.classes, units: f.units };
         pk.value = w[f.name];
         pk.names = w.names;
+        pk.signs = w.signs;
+        pk.addEventListener("signed", (ev) => {
+          ev.stopPropagation();
+          const signs = { ...(this._config.widgets[i].signs || {}) };
+          if (ev.detail.neg) signs[ev.detail.id] = -1; else delete signs[ev.detail.id];
+          upd({ signs });
+        });
         pk.addEventListener("renamed", (ev) => {
           ev.stopPropagation();
           const names = { ...(this._config.widgets[i].names || {}) };

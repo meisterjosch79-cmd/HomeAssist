@@ -44,6 +44,16 @@ Die Werte kommen aus den Langzeitstatistiken von Home Assistant:
 - Der laufende Zeitraum hängt der aktuellen Stunde bis zu ca. 1 h hinterher (Statistik wird stündlich geschrieben); „Tag“ ist minutengenau.
 - Im Editor lässt sich der Umschalter ausblenden.
 
+## Batterien mit getrennten Sensoren für Laden / Entladen
+Das Feld **Leistung** (Batterie-Widget) bzw. **Batterie** (Energiefluss) addiert alle eingetragenen Sensoren. Vorzeichen: **+ = Laden, − = Entladen**.
+
+- Batterie mit **einem** Sensor (±): normal eintragen.
+- Batterie mit **getrennten** Sensoren: den Lade-Sensor normal eintragen, den Entlade-Sensor ebenfalls eintragen und bei ihm
+  **„Wert abziehen (−)“** anhaken. Die Karte rechnet dann: Batterie A (±) + Laden B − Entladen B.
+- Liefert ein Sensor das Vorzeichen genau umgekehrt, den Schalter *Batterie-Vorzeichen umkehren* verwenden (wirkt auf die Summe).
+
+„Wert abziehen“ gibt es bei jedem Feld mit mehreren Sensoren, z. B. auch beim Hausverbrauch.
+
 ## Widgets
 | Typ | Zweck |
 |---|---|
