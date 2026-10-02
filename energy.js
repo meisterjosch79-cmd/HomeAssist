@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.12.0";
+const OB_VERSION = "0.12.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -156,7 +156,9 @@ class OmniBatteryDashboard extends HTMLElement {
     const s = this._st(id); if (!s) return "n/a";
     const v = parseFloat(s.state);
     const u = s.attributes.unit_of_measurement || "";
-    return isNaN(v) ? s.state : `${decimals != null ? v.toFixed(decimals) : v} ${u}`.trim();
+    // höchstens 2 Nachkommastellen (oder die konfigurierten), ohne unnötige Nullen
+    const d = decimals != null ? decimals : 2;
+    return isNaN(v) ? s.state : `${decimals != null ? v.toFixed(d) : String(Math.round(v * 10 ** d) / 10 ** d)} ${u}`.trim();
   }
   _name(id, fallback) { return fallback || this._st(id)?.attributes?.friendly_name || id || ""; }
 
@@ -440,7 +442,7 @@ class OmniBatteryDashboard extends HTMLElement {
       .parts div{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
       .parts span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.parts b{font-weight:500;color:var(--primary-text-color);white-space:nowrap}
       .dev{margin-bottom:8px}.dl{display:flex;justify-content:space-between;font-size:.9em;gap:8px}
-      .dl span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .dl span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.dl b{white-space:nowrap}
       .bar{height:6px;border-radius:3px;background:var(--divider-color);margin-top:3px}
       .bar i{display:block;height:100%;border-radius:3px;background:var(--primary-color)}
       .hist{width:100%;height:90px}
