@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.13.0";
+const OB_VERSION = "0.13.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -201,7 +201,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const node = (icon, label, val, note, color, parts = "") =>
       `<div class="node" style="--c:${color}"><div class="nh"><span class="ni">${icon}</span>
         <div class="nt"><div class="nl">${label}</div><div class="sub">${note}</div></div>
-        <div class="nv">${this._fmtW(val === null ? null : Math.abs(val))}</div></div>${parts}</div>`;
+        <div class="nv">${this._fmtW(val === null ? null : label === "Haus" ? val : Math.abs(val))}</div></div>${parts}</div>`;
     const now = this._period === "now", th = now ? 10 : 0.005, pt = now ? "" : " (netto)";
     const gridNote = grid === null ? "" : grid > th ? "⬇ Netzbezug" + pt : grid < -th ? "⬆ Einspeisung" + pt : "Ausgeglichen";
     const gridCol = grid > th ? "#c0392b" : grid < -th ? "#2e9e5b" : "var(--secondary-text-color)";
@@ -281,7 +281,9 @@ class OmniBatteryDashboard extends HTMLElement {
   /** Wert des virtuellen Sensors „nicht zugeordnet“ (W bzw. kWh) */
   _unassigned() {
     const bw = (this._config.widgets || []).find((x) => x.type === "balance") || {};
-    return this._balanceCalc(bw)?.rest ?? null;
+    const r = this._balanceCalc(bw)?.rest;
+    // negativ = Messfehler/Vorzeichenproblem (die Bilanz zeigt das rot); in Listen und Summen nie weniger als 0
+    return r == null ? null : Math.max(0, r);
   }
 
   /** Energiebilanz: Zufluss (Solar + Netz − Batterie) abzüglich aller Verbraucher = nicht zugeordnet */
