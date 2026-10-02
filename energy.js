@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.9.0";
+const OB_VERSION = "0.9.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -214,12 +214,15 @@ class OmniBatteryDashboard extends HTMLElement {
   }
 
   _devices(w) {
-    const rows = this._use(w.entities || []).map((id) => ({ id, v: this._sv(w, id) }));
+    // Jedes Gerät ist ein eigener Eintrag (keine Summe): alle gewählten Sensoren anzeigen.
+    // Aktuell: Leistungssensoren mit Balken, Energiezähler (z. B. „heute“) mit ihrem eigenen Wert. Tag–Jahr: Verbrauch aus der Statistik.
+    const now = this._period === "now";
+    const rows = this._ids(w.entities).map((id) => ({ id, v: this._sv(w, id) }));
     const max = w.max || Math.max(1, ...rows.map((r) => Math.abs(r.v || 0)));
-    rows.sort((a, b) => (b.v || 0) - (a.v || 0));
+    rows.sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity));
     return `<div class="devs">${rows.map((r) => `
-      <div class="dev"><div class="dl"><span>${esc(this._label(w, r.id))}</span><b>${esc(r.v !== null || this._period !== "now" ? this._fmtW(r.v) : this._fmt(r.id))}</b></div>
-      <div class="bar"><i style="width:${Math.min(100, Math.abs(r.v || 0) / max * 100)}%"></i></div></div>`).join("") || '<div class="sub">Keine Geräte gewählt</div>'}</div>`;
+      <div class="dev"><div class="dl"><span>${esc(this._label(w, r.id))}</span><b>${esc(!now || r.v !== null ? this._fmtW(r.v) : this._fmt(r.id))}</b></div>
+      ${r.v !== null ? `<div class="bar"><i style="width:${Math.min(100, Math.abs(r.v) / max * 100)}%"></i></div>` : ""}</div>`).join("") || '<div class="sub">Keine Geräte gewählt</div>'}</div>`;
   }
 
   _history(w) {
@@ -278,6 +281,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const ids = new Set();
     for (const w of this._config.widgets || [])
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities"]) this._use(w[k]).forEach((i) => ids.add(i));
+    for (const w of this._config.widgets || []) this._ids(w.entities).forEach((i) => ids.add(i));
     if (!ids.size) return;
     this._statBusy = true; this._loading = !this._stat[p]; if (this._loading) this._render();
     const T = (v) => (typeof v === "number" ? v : Date.parse(v));
