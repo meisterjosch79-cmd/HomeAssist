@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.11.1";
+const OB_VERSION = "0.12.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -496,9 +496,14 @@ class ObEntityPicker extends HTMLElement {
     </style><div class="p"><div class="lb"></div><div class="head"></div><div class="panel" hidden>
       <div class="ph"><b>Sensor auswählen</b><span class="cl" title="Schließen">✕</span></div>
       <label class="all"><input type="checkbox" class="allcb"> Alle Sensoren anzeigen (Filter aus)</label>
+      <label class="all mw">Nur Sensoren, die gerade mindestens <input type="number" class="minw" min="0" step="1" placeholder="z. B. 10" style="width:90px;display:inline-block;margin:0 4px"> W verbrauchen</label>
       <select class="dev"></select><input class="q" placeholder="Durchsuchen …"><div class="list"></div></div></div>`;
     this.querySelector(".lb").textContent = this._opts?.label || "";
     this.querySelector(".cl").addEventListener("click", () => this._toggle(false));
+    this.querySelector(".minw").addEventListener("input", (e) => {
+      const v = parseFloat(e.target.value); this._minW = isNaN(v) ? null : v;
+      this._fillDevices(); this._renderList();
+    });
     this.querySelector(".allcb").addEventListener("change", (e) => { this._all = e.target.checked; this._fillDevices(); this._renderList(); });
     this.querySelector(".dev").addEventListener("change", (e) => { this._device = e.target.value; this._renderList(); });
     this.querySelector(".q").addEventListener("input", (e) => { this._q = e.target.value.toLowerCase(); this._renderList(); });
@@ -553,11 +558,18 @@ class ObEntityPicker extends HTMLElement {
     const dn = this._devName(id);
     return dn && n.startsWith(dn + " ") ? n.slice(dn.length + 1) : n;
   }
+  /** aktueller Wert in Watt (nur Leistungssensoren W/kW/MW, sonst null) */
+  _wattsOf(id) {
+    const st = this._hass?.states?.[id], u = st?.attributes?.unit_of_measurement, v = parseFloat(st?.state);
+    if (isNaN(v) || !["W", "kW", "MW"].includes(u)) return null;
+    return u === "kW" ? v * 1000 : u === "MW" ? v * 1e6 : v;
+  }
   _candidates() {
     const o = this._all ? {} : this._opts || {}, st = this._hass?.states || {};
     return Object.keys(st).filter((id) => {
       if (o.domain && !id.startsWith(o.domain + ".")) return false;
       const a = st[id].attributes;
+      if (this._minW != null) { const w = this._wattsOf(id); if (w === null || w < this._minW) return false; }
       if (o.classes && !o.classes.includes(a.device_class) && !(o.units && o.units.includes(a.unit_of_measurement))) return false;
       return true;
     });
@@ -593,7 +605,7 @@ class ObEntityPicker extends HTMLElement {
     const l = this.querySelector(".list"); if (!l) return;
     const items = this._candidates().map((id) => ({ id, dev: this._devName(id) || "(ohne Gerät)", name: this._entName(id) }))
       .filter((x) => (!this._device || x.dev === this._device) && (!this._q || (x.name + x.id + x.dev).toLowerCase().includes(this._q)))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => this._minW != null ? (this._wattsOf(b.id) ?? 0) - (this._wattsOf(a.id) ?? 0) : a.name.localeCompare(b.name));
     l.innerHTML = items.slice(0, 300).map((x) => `<div class="it" data-id="${esc(x.id)}"><div class="n">${esc(x.name)}<small>${esc(this._device ? x.id : x.dev + " · " + x.id)}</small></div>
       <div class="v">${esc(this._val(x.id))}</div></div>`).join("") || '<div class="it">Keine passenden Sensoren (Filter im Editor abschaltbar)</div>';
   }
