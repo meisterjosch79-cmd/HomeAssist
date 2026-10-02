@@ -3,13 +3,14 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.9.1";
+const OB_VERSION = "0.10.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
   flow: { label: "Energiefluss (Solar / Netz / Batterie / Haus)", icon: "⚡" , short: "Energiefluss" },
   value: { label: "Einzelwert", icon: "🔢" , short: "Wert" },
   devices: { label: "Geräteverbrauch (Liste)", icon: "🔌" , short: "Geräte" },
+  balance: { label: "Energiebilanz (nicht zugeordnet)", icon: "⚖️", short: "Energiebilanz" },
   history: { label: "Verlauf (Diagramm)", icon: "📈" , short: "Verlauf" },
 };
 
@@ -25,6 +26,8 @@ const LABELS = {
   max: "Maximalwert für Balken (leer = automatisch)", hours: "Zeitraum (Stunden)",
 };
 
+// Typabhängige Feldbeschriftungen
+const LABELS_T = { balance: { entities: "Verbraucher (jeder Sensor wird nur einmal gezählt)" } };
 const WIDTH = { name: "width", selector: { number: { min: 1, max: 4, mode: "box" } } };
 const NAME = { name: "name", selector: { text: {} } };
 // Filter für die Entitätsauswahl: [domain, device_class]. Über "Filter" im Editor abschaltbar.
@@ -47,6 +50,7 @@ const SCHEMAS = {
     { name: "decimals", selector: { number: { min: 0, max: 4, mode: "box" } } }, WIDTH],
   devices: [NAME, { name: "entities", selector: { entity: { multiple: true } }, _f: "entities" },
     { name: "max", selector: { number: { min: 0, mode: "box" } } }, WIDTH],
+  balance: [NAME, MULTI("solar"), MULTI("grid"), MULTI("grid_export"), MULTI("battery"), BOOL("invert_grid"), BOOL("invert_battery"), MULTI("entities"), WIDTH],
   history: [NAME, ENT("entity"), { name: "hours", selector: { number: { min: 1, max: 168, mode: "box" } } }, WIDTH],
 };
 
@@ -225,6 +229,46 @@ class OmniBatteryDashboard extends HTMLElement {
       ${r.v !== null ? `<div class="bar"><i style="width:${Math.min(100, Math.abs(r.v) / max * 100)}%"></i></div>` : ""}</div>`).join("") || '<div class="sub">Keine Geräte gewählt</div>'}</div>`;
   }
 
+  /** Energiebilanz: Zufluss (Solar + Netz − Batterie) abzüglich aller Verbraucher = nicht zugeordnet */
+  _balance(w) {
+    const now = this._period === "now";
+    const solar = this._sumW(w.solar, w);
+    const imp = this._sumW(w.grid, w), exp = this._sumW(w.grid_export, w);
+    let grid = imp === null && exp === null ? null : (imp || 0) - (exp || 0);
+    if (grid !== null && w.invert_grid) grid = -grid;
+    let bat = this._sumW(w.battery, w); if (bat !== null && w.invert_battery) bat = -bat;
+    const batIn = bat === null ? null : -bat;  // Entladen = Zufluss, Laden = Abfluss
+    if (solar === null && grid === null && bat === null) return `<div class="sub">Quellen (Solar / Netz / Batterie) eintragen.</div>`;
+    const supply = (solar || 0) + (grid || 0) + (batIn || 0);
+    // jeder Sensor nur einmal: Duplikate und Sensoren, die schon als Quelle dienen, werden ignoriert
+    const src = new Set(["solar", "grid", "grid_export", "battery"].flatMap((k) => this._ids(w[k])));
+    const cons = [...new Set(this._ids(w.entities))].filter((id) => !src.has(id));
+    const rows = cons.map((id) => ({ id, v: this._sv(w, id) }));
+    const used = rows.reduce((a, r) => a + (r.v || 0), 0);
+    const rest = supply - used, uncounted = rows.filter((r) => r.v === null).length;
+    const tol = Math.max(Math.abs(supply) * 0.05, now ? 30 : 0.05);
+    const col = rest < -tol ? "#c0392b" : Math.abs(rest) <= tol ? "#2e9e5b" : "#e8833a";
+    const pct = supply > 0 ? Math.min(100, Math.max(0, used / supply * 100)) : 0;
+    const row = (label, v, cls = "") => `<div class="brow ${cls}"><span>${esc(label)}</span><b>${esc(this._fmtW(v))}</b></div>`;
+    const max = Math.max(1e-9, ...rows.map((r) => Math.abs(r.v || 0)));
+    const sorted = [...rows].sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity));
+    return `<div class="bal">
+      <div class="bsec">Zufluss</div>
+      ${solar !== null ? row("☀️ Solar", solar) : ""}
+      ${grid !== null ? row(grid >= 0 ? "🏭 Netzbezug" : "🏭 Einspeisung (netto)", grid) : ""}
+      ${batIn !== null ? row(batIn >= 0 ? "🔋 Batterie entlädt" : "🔋 Batterie lädt (netto)", batIn) : ""}
+      ${row("Summe verfügbar", supply, "tot")}
+      <div class="bsec">Verbraucher (${rows.length})</div>
+      ${sorted.map((r) => `<div class="brow"><span title="${esc(r.id)}">${esc(this._label(w, r.id))}</span><b>${esc(r.v === null ? "–" : this._fmtW(r.v))}</b></div>
+        ${r.v !== null ? `<div class="bar"><i style="width:${Math.min(100, Math.abs(r.v) / max * 100)}%"></i></div>` : ""}`).join("") || '<div class="sub">Noch keine Verbraucher eingetragen.</div>'}
+      ${uncounted ? `<div class="sub">${uncounted} Zähler ohne Leistungswert sind in „Aktuell“ nicht eingerechnet (nur Tag–Jahr).</div>` : ""}
+      ${row("Verbraucher gesamt", used, "tot")}
+      <div class="stack"><i style="width:${pct.toFixed(1)}%"></i></div>
+      <div class="rest" style="--c:${col}"><div><div class="nl">Energiemenge nicht zugeordnet</div>
+        <div class="sub">${rest < -tol ? "Verbraucher übersteigen den Zufluss" : Math.abs(rest) <= tol ? "Alles zugeordnet ✓" : supply > 0 ? (100 - pct).toFixed(0) + " % des Zuflusses fehlen in der Zuordnung" : ""}</div></div>
+        <div class="nv">${esc(this._fmtW(rest))}</div></div></div>`;
+  }
+
   _history(w) {
     const d = this._hist[w.entity + "|" + (w.hours || 24)];
     if (!d || d.length < 2) return `<div class="sub">Lade Verlauf …</div>`;
@@ -367,6 +411,13 @@ class OmniBatteryDashboard extends HTMLElement {
       .bar{height:6px;border-radius:3px;background:var(--divider-color);margin-top:3px}
       .bar i{display:block;height:100%;border-radius:3px;background:var(--primary-color)}
       .hist{width:100%;height:90px}
+      .bal{font-size:.92em}.bsec{margin:8px 0 2px;font-size:.8em;text-transform:uppercase;letter-spacing:.04em;color:var(--secondary-text-color)}
+      .brow{display:flex;justify-content:space-between;gap:8px;padding:2px 0}.brow span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .brow b{white-space:nowrap}.brow.tot{border-top:1px solid var(--divider-color);margin-top:4px;padding-top:4px;font-weight:600}
+      .stack{height:8px;border-radius:4px;background:var(--c,#e8833a);margin:10px 0;overflow:hidden;background:#e8833a55}
+      .stack i{display:block;height:100%;background:var(--primary-color)}
+      .rest{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--card-background-color);border-radius:10px;padding:10px 12px;border-left:4px solid var(--c)}
+      .rest .nv{font-size:1.3em;font-weight:700;color:var(--c);white-space:nowrap}
       .upd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;font-size:.8em;color:var(--secondary-text-color)}
       .upd button{padding:4px 10px;border-radius:6px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer}
     </style>
@@ -605,7 +656,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       d.appendChild(form);
       for (const f of fields.filter((x) => x.isEnt)) {
         const pk = document.createElement("ob-entity-picker");
-        pk.options = { label: LABELS[f.name] || f.name, multiple: f.multiple, domain: f.domain, classes: f.classes, units: f.units };
+        pk.options = { label: LABELS_T[w.type]?.[f.name] || LABELS[f.name] || f.name, multiple: f.multiple, domain: f.domain, classes: f.classes, units: f.units };
         pk.value = w[f.name];
         pk.names = w.names;
         pk.signs = w.signs;
