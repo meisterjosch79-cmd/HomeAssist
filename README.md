@@ -31,22 +31,31 @@ Siehe `example-dashboard.yaml`. Neue Widget-Typen lassen sich in `omnibattery-da
 ## Update per Knopfdruck (ohne Hochladen)
 Die Karte hat unten einen Button **⟳ Update**. Er lässt Home Assistant die neueste
 `omnibattery-dashboard.js` aus GitHub nach `/config/www/` laden und lädt danach die Seite neu.
-Das Repo kann dabei privat bleiben.
 
-Einmalige Einrichtung (benötigt den Loader `energy-loader.js`, siehe oben):
+### Einrichtung bei öffentlichem Repo (einfach, kein Token)
+Voraussetzung: der Loader `energy-loader.js` ist als `/config/www/energy.js` eingerichtet (siehe oben).
 
-1. **Token anlegen:** GitHub → Settings → Developer settings → Fine-grained tokens → *Generate new token*.
-   Nur Repository `HomeAssist`, Berechtigung *Contents: Read-only*. Token kopieren.
-2. **`/config/secrets.yaml`** (eine Zeile, `DEIN_TOKEN` ersetzen):
-   ```yaml
-   ob_update_cmd: 'curl -fsSL -H "Authorization: Bearer DEIN_TOKEN" -H "Accept: application/vnd.github.raw+json" https://api.github.com/repos/meisterjosch79-cmd/HomeAssist/contents/omnibattery-dashboard.js -o /config/www/omnibattery-dashboard.js'
-   ```
-3. **`/config/configuration.yaml`**:
+1. **`/config/configuration.yaml`** ergänzen:
    ```yaml
    shell_command:
-     omnibattery_update: !secret ob_update_cmd
+     omnibattery_update: >-
+       curl -fsSL -o /config/www/omnibattery-dashboard.js
+       https://raw.githubusercontent.com/meisterjosch79-cmd/HomeAssist/main/omnibattery-dashboard.js
    ```
-4. Home Assistant einmal neu starten (Entwicklerwerkzeuge → YAML → *Alle YAML-Konfigurationen neu laden* reicht für shell_command nicht immer).
-5. Erste Version von `omnibattery-dashboard.js` einmal manuell nach `/config/www/` legen. Danach genügt der Button.
+2. Home Assistant einmal neu starten.
+3. Die erste Version von `omnibattery-dashboard.js` einmal manuell nach `/config/www/` legen. Danach genügt der Button.
+
+### Einrichtung bei privatem Repo
+Zusätzlich nötig: ein GitHub-Token (Fine-grained, nur Repo `HomeAssist`, *Contents: Read-only*).
+In `/config/secrets.yaml`:
+```yaml
+ob_update_cmd: 'curl -fsSL -H "Authorization: Bearer DEIN_TOKEN" -H "Accept: application/vnd.github.raw+json" https://api.github.com/repos/meisterjosch79-cmd/HomeAssist/contents/omnibattery-dashboard.js -o /config/www/omnibattery-dashboard.js'
+```
+und in `configuration.yaml`:
+```yaml
+shell_command:
+  omnibattery_update: !secret ob_update_cmd
+```
+Anschließend Home Assistant neu starten.
 
 Der Button kann von jedem Nutzer des Dashboards benutzt werden. Im Editor lässt er sich ausblenden.
