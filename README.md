@@ -17,9 +17,10 @@ Einmalige Einrichtung, in `/config/configuration.yaml` ergänzen:
 ```yaml
 shell_command:
   omnibattery_update: >-
-    curl -fsSL -o /config/www/energy.js
-    https://raw.githubusercontent.com/meisterjosch79-cmd/HomeAssist/main/energy.js
+    curl -fsSL -H "Cache-Control: no-cache" -o /config/www/energy.js
+    "https://raw.githubusercontent.com/meisterjosch79-cmd/HomeAssist/main/energy.js?t={{ now().timestamp() | int }}"
 ```
+(`?t=…` umgeht den GitHub-Cache, der Änderungen sonst bis zu 5 Minuten verzögert.)
 Danach Home Assistant neu starten. Der Button ist im Karten-Editor abschaltbar.
 
 Bei privatem Repo braucht der Befehl einen GitHub-Token (Fine-grained, nur dieses Repo, *Contents: Read-only*):

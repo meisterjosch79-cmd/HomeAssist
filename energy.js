@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.11.0";
+const OB_VERSION = "0.11.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -387,10 +387,15 @@ class OmniBatteryDashboard extends HTMLElement {
       const r = await this._hass.callWS({ type: "call_service", domain: "shell_command", service: "omnibattery_update", return_response: true });
       const res = r?.response || {};
       if (res.returncode) throw new Error((res.stderr || `curl-Fehler ${res.returncode}`).toString().trim().slice(0, 200));
-      this._ust = "Aktualisiert – lade neu …"; this._render();
-      // Browser-Cache der neuen Datei auffrischen, damit der Reload wirklich die neue Version lädt
-      const src = [...document.querySelectorAll("script[src]")].map((x) => x.src).find((u) => /energy\.js/.test(u)) || "/local/energy.js";
-      try { await fetch(src, { cache: "reload" }); } catch (e) { /* egal */ }
+      // Tatsächlich geladene Resource-URL ermitteln (kann ein ?v=… oder hacstag enthalten) und deren Browser-Cache auffrischen
+      const src = performance.getEntriesByType("resource").map((x) => x.name).find((n) => /\/energy\.js(\?|$)/.test(n)) || "/local/energy.js";
+      let ver = null;
+      try { ver = /OB_VERSION = "([^"]+)"/.exec(await (await fetch(src, { cache: "reload" })).text())?.[1]; } catch (e) { /* egal */ }
+      if (ver === OB_VERSION) {
+        this._ust = `Server liefert noch v${ver} – GitHub-Cache (bis ca. 5 Min.), bitte später erneut versuchen`; this._render();
+        return;
+      }
+      this._ust = `v${ver || "?"} geladen – lade neu …`; this._render();
       setTimeout(() => location.reload(), 500);
     } catch (e) {
       const m = e?.message || e?.error || JSON.stringify(e);
