@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.8.0";
+const OB_VERSION = "0.8.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -28,10 +28,12 @@ const LABELS = {
 const WIDTH = { name: "width", selector: { number: { min: 1, max: 4, mode: "box" } } };
 const NAME = { name: "name", selector: { text: {} } };
 // Filter für die Entitätsauswahl: [domain, device_class]. Über "Filter" im Editor abschaltbar.
+const U_POWER = ["W", "kW", "MW", "Wh", "kWh", "MWh"];
+// [domain, device_classes, units]: ein Sensor passt, wenn Geräteklasse ODER Einheit passt (viele Sensoren haben keine Geräteklasse)
+const PW = ["sensor", ["power", "energy"], U_POWER];
 const FILTERS = {
-  soc: ["sensor", ["battery"]], power: ["sensor", ["power", "energy"]], solar: ["sensor", ["power", "energy"]],
-  grid: ["sensor", ["power", "energy"]], grid_export: ["sensor", ["power", "energy"]], battery: ["sensor", ["power", "energy"]], home: ["sensor", ["power", "energy"]],
-  entities: ["sensor", ["power", "energy"]], entity: [null, null],
+  soc: ["sensor", ["battery"], ["%"]], power: PW, solar: PW, grid: PW, grid_export: PW, battery: PW, home: PW, entities: PW,
+  entity: [null, null, null],
 };
 const ENT = (n) => ({ name: n, selector: { entity: {} }, _f: n });
 const MULTI = (n) => ({ name: n, selector: { entity: { multiple: true } }, _f: n });
@@ -388,6 +390,7 @@ class ObEntityPicker extends HTMLElement {
       .p button{cursor:pointer}.p .panel{border:1px solid var(--primary-color);border-radius:8px;padding:8px;margin-top:6px}
       .p .panel select,.p .panel input{width:100%;box-sizing:border-box;margin-bottom:6px}
       .p .list{max-height:300px;overflow:auto}
+      .p [hidden]{display:none!important}.p .all{display:block;font-size:.85em;margin:0 0 6px}.p .all input{width:auto;margin:0 6px 0 0}
       .p .ph{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
       .p .cl{cursor:pointer;padding:2px 8px;font-size:1.2em;border-radius:6px}.p .cl:hover{background:var(--secondary-background-color)}
       .p .sel{flex-wrap:wrap}.p .sel input.nm{flex:1 1 100%;box-sizing:border-box;font-size:.85em}
@@ -397,9 +400,11 @@ class ObEntityPicker extends HTMLElement {
       .p .it .v{white-space:nowrap;font-weight:600}
     </style><div class="p"><div class="lb"></div><div class="head"></div><div class="panel" hidden>
       <div class="ph"><b>Sensor auswählen</b><span class="cl" title="Schließen">✕</span></div>
+      <label class="all"><input type="checkbox" class="allcb"> Alle Sensoren anzeigen (Filter aus)</label>
       <select class="dev"></select><input class="q" placeholder="Durchsuchen …"><div class="list"></div></div></div>`;
     this.querySelector(".lb").textContent = this._opts?.label || "";
     this.querySelector(".cl").addEventListener("click", () => this._toggle(false));
+    this.querySelector(".allcb").addEventListener("change", (e) => { this._all = e.target.checked; this._fillDevices(); this._renderList(); });
     this.querySelector(".dev").addEventListener("change", (e) => { this._device = e.target.value; this._renderList(); });
     this.querySelector(".q").addEventListener("input", (e) => { this._q = e.target.value.toLowerCase(); this._renderList(); });
     this.querySelector(".list").addEventListener("click", (e) => {
@@ -428,7 +433,7 @@ class ObEntityPicker extends HTMLElement {
   _toggle(open) {
     this._open = open;
     this.querySelector(".panel").hidden = !open;
-    if (open) { this._fillDevices(); this._renderList(); this.querySelector(".q").focus(); }
+    if (open) { this.querySelector(".all").hidden = !(this._opts.domain || this._opts.classes); this._fillDevices(); this._renderList(); this.querySelector(".q").focus(); }
     this._renderHead();
   }
 
@@ -448,10 +453,11 @@ class ObEntityPicker extends HTMLElement {
     return dn && n.startsWith(dn + " ") ? n.slice(dn.length + 1) : n;
   }
   _candidates() {
-    const o = this._opts || {}, st = this._hass?.states || {};
+    const o = this._all ? {} : this._opts || {}, st = this._hass?.states || {};
     return Object.keys(st).filter((id) => {
       if (o.domain && !id.startsWith(o.domain + ".")) return false;
-      if (o.classes && !o.classes.includes(st[id].attributes.device_class)) return false;
+      const a = st[id].attributes;
+      if (o.classes && !o.classes.includes(a.device_class) && !(o.units && o.units.includes(a.unit_of_measurement))) return false;
       return true;
     });
   }
@@ -508,7 +514,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     return (SCHEMAS[type] || []).map((f) => {
       const isEnt = !!f._f;
       const flt = isEnt && this._filterOn !== false ? FILTERS[f._f] : null;
-      return { name: f.name, schema: f, isEnt, multiple: !!f.selector?.entity?.multiple, domain: flt?.[0] || null, classes: flt?.[1] || null };
+      return { name: f.name, schema: f, isEnt, multiple: !!f.selector?.entity?.multiple, domain: flt?.[0] || null, classes: flt?.[1] || null, units: flt?.[2] || null };
     });
   }
 
@@ -581,7 +587,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       d.appendChild(form);
       for (const f of fields.filter((x) => x.isEnt)) {
         const pk = document.createElement("ob-entity-picker");
-        pk.options = { label: LABELS[f.name] || f.name, multiple: f.multiple, domain: f.domain, classes: f.classes };
+        pk.options = { label: LABELS[f.name] || f.name, multiple: f.multiple, domain: f.domain, classes: f.classes, units: f.units };
         pk.value = w[f.name];
         pk.names = w.names;
         pk.addEventListener("renamed", (ev) => {
