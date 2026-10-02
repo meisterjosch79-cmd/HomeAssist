@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.6.0";
+const OB_VERSION = "0.7.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -214,6 +214,22 @@ class OmniBatteryDashboard extends HTMLElement {
     }
   }
 
+  /** Lässt Home Assistant die neueste Version aus GitHub laden (shell_command) und lädt die Seite neu. */
+  async _update() {
+    this._ust = "Lade Update …"; this._render();
+    try {
+      const r = await this._hass.callWS({ type: "call_service", domain: "shell_command", service: "omnibattery_update", return_response: true });
+      const res = r?.response || {};
+      if (res.returncode) throw new Error((res.stderr || `curl-Fehler ${res.returncode}`).toString().trim().slice(0, 200));
+      this._ust = "Aktualisiert – lade neu …"; this._render();
+      setTimeout(() => location.reload(), 800);
+    } catch (e) {
+      const m = e?.message || e?.error || JSON.stringify(e);
+      this._ust = /not found|service/i.test(m) ? "Service shell_command.omnibattery_update fehlt – siehe README" : "Fehler: " + m;
+      this._render();
+    }
+  }
+
   _render() {
     if (!this._config) return;
     const body = (this._config.widgets || []).map((w) => {
@@ -247,9 +263,14 @@ class OmniBatteryDashboard extends HTMLElement {
       .bar{height:6px;border-radius:3px;background:var(--divider-color);margin-top:3px}
       .bar i{display:block;height:100%;border-radius:3px;background:var(--primary-color)}
       .hist{width:100%;height:90px}
+      .upd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;font-size:.8em;color:var(--secondary-text-color)}
+      .upd button{padding:4px 10px;border-radius:6px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer}
     </style>
     <ha-card><div class="wrap">${this._config.title ? `<div class="title">${esc(this._config.title)}</div>` : ""}
-      <div class="grid">${body || '<div class="sub">Noch keine Widgets – Karte bearbeiten und Widgets hinzufügen.</div>'}</div></div></ha-card>`;
+      <div class="grid">${body || '<div class="sub">Noch keine Widgets – Karte bearbeiten und Widgets hinzufügen.</div>'}</div>
+      ${this._config.show_update === false ? "" : `<div class="upd"><span>OmniBattery v${OB_VERSION}</span><button id="upd">⟳ Update</button><span>${esc(this._ust || "")}</span></div>`}
+      </div></ha-card>`;
+    this.shadowRoot.getElementById("upd")?.addEventListener("click", () => this._update());
   }
 }
 
@@ -415,12 +436,17 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     </style><div class="ob">
       <label>Titel</label><input class="t" id="title" value="${esc(this._config.title)}">
       <label><input type="checkbox" id="flt" ${this._filterOn === false ? "" : "checked"}> Sensorliste vorfiltern (Leistung / Batterie)</label>
+      <label><input type="checkbox" id="su" ${this._config.show_update === false ? "" : "checked"}> Update-Button in der Karte anzeigen</label>
       <div id="list"></div>
       <div class="row"><select id="newtype">${Object.entries(WIDGET_TYPES).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join("")}</select>
         <button id="add">+ Widget hinzufügen</button></div>
       <div class="row" style="opacity:.8;font-size:.85em">Version ${OB_VERSION} <button id="reload">↻ Neu laden</button></div></div>`;
     this.querySelector("#reload").addEventListener("click", () => location.reload());
     this.querySelector("#title").addEventListener("input", (e) => { this._config.title = e.target.value; this._emit(); });
+    this.querySelector("#su").addEventListener("change", (e) => {
+      if (e.target.checked) delete this._config.show_update; else this._config.show_update = false;
+      this._emit();
+    });
     this.querySelector("#flt").addEventListener("change", (e) => { this._filterOn = e.target.checked; this._build(); });
     this.querySelector("#add").addEventListener("click", () => {
       this._config.widgets = [...ws, { type: this.querySelector("#newtype").value }];
