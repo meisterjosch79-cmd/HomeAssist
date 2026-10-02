@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.5.0";
+const OB_VERSION = "0.5.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -379,8 +379,9 @@ class ObEntityPicker extends HTMLElement {
 class OmniBatteryDashboardEditor extends HTMLElement {
   setConfig(config) {
     const json = JSON.stringify(config);
-    if (json === this._emitted) { this._config = config; return; }
-    this._config = { widgets: [], ...config };
+    if (json === this._emitted) return;  // Echo unserer eigenen Änderung – eigenen Stand behalten
+    this._config = JSON.parse(json);
+    if (!Array.isArray(this._config.widgets)) this._config.widgets = [];
     this._build();
   }
   set hass(h) {
@@ -397,8 +398,10 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   }
 
   _emit() {
+    // Immer eine frische Kopie senden: Home Assistant hält die Konfiguration als Referenz,
+    // in-place geänderte Objekte würden dort als "unverändert" erkannt und nicht gespeichert.
     this._emitted = JSON.stringify(this._config);
-    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: JSON.parse(this._emitted) }, bubbles: true, composed: true }));
   }
 
   _build() {
