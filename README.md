@@ -85,6 +85,9 @@ Das Widget **Top-Verbraucher** durchsucht alle Sensoren im System (nicht nur die
 - Die Quellen (Solar/Netz/Batterie aus den Energiefluss-/Batterie-Widgets) werden ausgeblendet, damit sie die Liste nicht anführen. Über die Option *Quellen ebenfalls anzeigen* einblendbar.
 - Mit **Ignorieren** blendest du weitere Gesamtwerte aus (z. B. „Gesamtverbrauch“ oder Summenzähler).
 - Anzahl der Einträge einstellbar (Standard 10).
+- **Häkchen vor jedem Eintrag** blendet den Sensor „für den Moment“ aus (gilt nur in diesem Browser, bleibt nach Neuladen erhalten). Mit **„👁 Ausgeblendete anzeigen“** über der Liste blendest du sie zum Zurückholen wieder ein, **„Zurücksetzen“** löscht alle Häkchen.
+- Das **Auswahlfeld „＋ zu Gerät …“** rechts neben dem Balken ordnet den Sensor direkt einem **Geräteverbrauch-Widget** der Karte zu. Die Zuordnung wird in der Dashboard-Konfiguration gespeichert
+  (braucht Administratorrechte und ein Dashboard im Storage-Modus, nicht YAML). Ist ein Sensor schon zugeordnet, steht stattdessen „✓ Widgetname“.
 - „Aktuell“ ist eine **Momentaufnahme** der aktuellen Sensorwerte (kein Mittelwert). Die Liste wird höchstens alle *refresh_s* Sekunden neu berechnet (Standard 5, im Editor einstellbar).
 
 ## Widgets
