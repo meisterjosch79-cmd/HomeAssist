@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.18.0";
+const OB_VERSION = "0.18.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -16,20 +16,20 @@ const WIDGET_TYPES = {
 };
 
 const LABELS = {
-  type: "Typ", width: "Breite (1-4 Spalten)", name: "Name", soc: "Ladestand (SOC) Entität",
-  power: "Leistung (+ = Laden; Entlade-Sensor mit „abziehen“ markieren)", invert_power: "Vorzeichen umkehren (Standard: + = Laden)",
-  capacity_kwh: "Kapazität (kWh, optional)", solar: "Solarproduktion (mehrere Sensoren werden addiert)",
-  grid: "Netz: Leistung (+ = Bezug) bzw. Bezug-Sensor", grid_export: "Netz: Einspeisung-Sensor (optional, separater Sensor)",
-  battery: "Batterie (+ = Laden; Entlade-Sensor mit „abziehen“ markieren)",
-  home: "Hausverbrauch (mehrere Sensoren werden addiert; leer = berechnen)",
+  type: "Typ", width: "Breite (1-4 Spalten)", name: "Name", soc: "Ladestand (SOC) — Sensor für den Ring (nur einer)",
+  power: "Leistung — + = Laden; Entlade-Sensor mit „abziehen“ markieren", invert_power: "Vorzeichen umkehren (Standard: + = Laden)",
+  capacity_kwh: "Kapazität (kWh, optional)", solar: "Solarproduktion — mehrere Sensoren werden addiert",
+  grid: "Netz: Bezug — + = Bezug, − = Einspeisung (oder reiner Bezug-Sensor)", grid_export: "Netz: Einspeisung — optional, nur bei separatem Sensor",
+  battery: "Batterie — + = Laden; Entlade-Sensor mit „abziehen“ markieren",
+  home: "Hausverbrauch — mehrere Sensoren werden addiert; leer = berechnen",
   invert_grid: "Netz-Vorzeichen umkehren (wenn Einspeisung als Bezug angezeigt wird)", invert_battery: "Batterie-Vorzeichen umkehren",
   refresh_s: "Aktualisierung alle … Sekunden (Standard 5, nur Ansicht „Aktuell“)", count: "Anzahl der Einträge (Standard 10, bis 1000; lange Listen scrollen)", include_sources: "Quellen (Solar/Netz/Batterie aus den Energiefluss-/Batterie-Widgets) ebenfalls anzeigen",
-  deduct: "Von „nicht zugeordnet“ abziehen (andere Bereiche, z. B. anderes Haus, Wallbox)", entity: "Entität", exclude: "Ignorieren (diese Sensoren nicht mitzählen, optional)", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte / Entitäten",
+  deduct: "Von „nicht zugeordnet“ abziehen — andere Bereiche, z. B. anderes Haus, Wallbox", entity: "Sensor", exclude: "Ignorieren — diese Sensoren nicht mitzählen (optional)", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte — jeder Sensor ist ein eigener Eintrag",
   max: "Maximalwert für Balken (leer = automatisch)", hours: "Zeitraum (Stunden)",
 };
 
 // Typabhängige Feldbeschriftungen
-const LABELS_T = { balance: { entities: "Zusätzliche Verbraucher (optional – Geräte aus den Geräte-Widgets werden automatisch übernommen)" } };
+const LABELS_T = { balance: { entities: "Zusätzliche Verbraucher — optional; Geräte aus den Geräte-Widgets werden automatisch übernommen" } };
 const WIDTH = { name: "width", selector: { number: { min: 1, max: 4, mode: "box" } } };
 const NAME = { name: "name", selector: { text: {} } };
 // Filter für die Entitätsauswahl: [domain, device_class]. Über "Filter" im Editor abschaltbar.
@@ -666,7 +666,9 @@ class ObEntityPicker extends HTMLElement {
     if (this._built) return;
     this._built = true;
     this.innerHTML = `<style>
-      .p{margin:10px 0}.p .lb{font-size:.85em;color:var(--secondary-text-color);margin-bottom:4px}
+      .p{margin:18px 0;padding:12px 14px 14px;background:var(--secondary-background-color);border-left:4px solid var(--primary-color);border-radius:10px}
+      .p .lb{margin-bottom:10px}.p .lb b{display:block;font-size:1.15em;font-weight:700;color:var(--primary-text-color)}
+      .p .lb small{display:block;margin-top:2px;font-size:.85em;color:var(--secondary-text-color)}
       .p .sel{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--divider-color);border-radius:8px;background:var(--card-background-color);margin-bottom:4px}
       .p .sel .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .p .sel .v{font-weight:600}.p .sel .x{cursor:pointer;opacity:.7}
@@ -688,7 +690,8 @@ class ObEntityPicker extends HTMLElement {
       <label class="all"><input type="checkbox" class="allcb"> Alle Sensoren anzeigen (Filter aus)</label>
       <label class="all mw">Nur Sensoren, die gerade mindestens <input type="number" class="minw" min="0" step="1" placeholder="z. B. 10" style="width:90px;display:inline-block;margin:0 4px"> W verbrauchen</label>
       <select class="dev"></select><input class="q" placeholder="Durchsuchen …"><div class="list"></div></div></div>`;
-    this.querySelector(".lb").textContent = this._opts?.label || "";
+    const [lt, lh] = String(this._opts?.label || "").split(" — ");
+    this.querySelector(".lb").innerHTML = `<b>${esc(lt)}</b>${lh ? `<small>${esc(lh)}</small>` : ""}`;
     this.querySelector(".cl").addEventListener("click", () => this._toggle(false));
     this.querySelector(".minw").addEventListener("input", (e) => {
       const v = parseFloat(e.target.value); this._minW = isNaN(v) ? null : v;
@@ -910,7 +913,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
         d.querySelector("summary").textContent = e.target.value || "Neuer Helfer";
       });
       const pk = document.createElement("ob-entity-picker");
-      pk.options = { label: "Sensoren (ohne Haken: addieren, mit Haken: abziehen)", multiple: true, noNames: true, domain: "sensor", classes: ["power", "energy"], units: U_POWER };
+      pk.options = { label: "Sensoren — ohne Haken addieren, mit Haken abziehen", multiple: true, noNames: true, domain: "sensor", classes: ["power", "energy"], units: U_POWER };
       pk.value = h.entities; pk.signs = h.signs; pk.hass = this._hass;
       pk.addEventListener("picked", (ev) => { ev.stopPropagation(); updH(i, { entities: ev.detail.value }); now.textContent = this._helperNow(this._config.helpers[i]); });
       pk.addEventListener("signed", (ev) => {
