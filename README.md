@@ -105,6 +105,6 @@ Beginne mit 15–30 Sekunden, sehr kurze Abstände können die Batterie belasten
 | `devices` | Verbrauchsliste mehrerer Geräte mit Balken |
 | `balance` | Energiebilanz (automatisch): Quellen aus den Energiefluss-/Batterie-Widgets, Verbraucher aus den Geräteverbrauch-Widgets, Rest = „Energiemenge nicht zugeordnet“ |
 | `top` | Top-Verbraucher (Standard 10) aus **allen** Sensoren des Systems, nicht nur den eingetragenen |
-| `history` | Verlaufsdiagramm einer Entität |
+| `history` | Verlaufsdiagramm einer Entität mit Achsen, Nulllinie (Bezug/Einspeisung bzw. Laden/Entladen farblich getrennt) und Hover-Anzeige mit Zeit und Wert |
 
 Siehe `example-dashboard.yaml`.

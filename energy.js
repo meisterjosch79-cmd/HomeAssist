@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.19.0";
+const OB_VERSION = "0.20.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -484,14 +484,73 @@ class OmniBatteryDashboard extends HTMLElement {
   _history(w) {
     const d = this._hist[w.entity + "|" + (w.hours || 24)];
     if (!d || d.length < 2) return `<div class="sub">Lade Verlauf …</div>`;
-    const W = 300, H = 90, xs = d.map((p) => p[0]), ys = d.map((p) => p[1]);
-    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys, 0), y1 = Math.max(...ys);
-    const X = (x) => ((x - x0) / (x1 - x0 || 1)) * W, Y = (y) => H - ((y - y0) / (y1 - y0 || 1)) * (H - 6) - 3;
-    const pts = d.map((p) => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ");
-    return `<svg viewBox="0 0 ${W} ${H}" class="hist" preserveAspectRatio="none">
-      <polygon points="0,${H} ${pts} ${W},${H}" fill="var(--primary-color)" opacity=".15"/>
-      <polyline points="${pts}" fill="none" stroke="var(--primary-color)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
-      <div class="sub">min ${y0.toFixed(1)} · max ${y1.toFixed(1)} ${esc(this._st(w.entity)?.attributes?.unit_of_measurement || "")}</div>`;
+    const ys = d.map((p) => p[1]), unit = this._st(w.entity)?.attributes?.unit_of_measurement || "";
+    const f = (v) => v.toLocaleString("de-DE", { maximumFractionDigits: unit === "W" ? 0 : 2 }) + (unit ? " " + unit : "");
+    return `<div class="chart" data-wi="${(this._config.widgets || []).indexOf(w)}"></div>
+      <div class="sub">min ${esc(f(Math.min(...ys)))} · max ${esc(f(Math.max(...ys)))} · Maus über das Diagramm zeigt Zeit und Wert</div>`;
+  }
+
+  /** Zeichnet die Diagramme mit Achsen, Nulllinie und Hover-Anzeige in der tatsächlichen Pixelbreite */
+  _drawCharts() {
+    this.shadowRoot.querySelectorAll(".chart").forEach((el) => {
+      const w = (this._config.widgets || [])[+el.dataset.wi]; if (!w) return;
+      const d = this._hist[w.entity + "|" + (w.hours || 24)]; if (!d || d.length < 2) return;
+      const unit = this._st(w.entity)?.attributes?.unit_of_measurement || "";
+      const W = Math.max(240, el.clientWidth || 300), H = 190, L = 52, R = 8, T = 10, B = 26, PW = W - L - R, PH = H - T - B;
+      const t1 = Date.now(), t0 = t1 - (w.hours || 24) * 3600e3;
+      let ys = d.map((p) => p[1]);
+      let lo = Math.min(...ys, 0), hi = Math.max(...ys, 0);
+      if (lo === hi) hi = lo + 1;
+      // „schöne“ Achsenschritte
+      const raw = (hi - lo) / 4, mag = 10 ** Math.floor(Math.log10(raw)), step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((x) => x >= raw);
+      lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+      const kw = unit === "W" && Math.max(Math.abs(lo), Math.abs(hi)) >= 2000;
+      const tick = (v) => (kw ? (v / 1000).toLocaleString("de-DE", { maximumFractionDigits: 2 }) + " kW" : v.toLocaleString("de-DE", { maximumFractionDigits: 2 }) + (unit ? " " + unit : ""));
+      const X = (t) => L + ((t - t0) / (t1 - t0)) * PW, Y = (v) => T + (1 - (v - lo) / (hi - lo)) * PH, Y0 = Y(0);
+      const pts = d.filter((p) => p[0] >= t0 - 1).map((p) => [Math.max(p[0], t0), p[1]]);
+      if (!pts.length) pts.push([t0, d[0][1]]);
+      pts.push([t1, pts[pts.length - 1][1]]);
+      const line = pts.map((p) => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ");
+      const area = `${X(pts[0][0]).toFixed(1)},${Y0.toFixed(1)} ${line} ${X(t1).toFixed(1)},${Y0.toFixed(1)}`;
+      let grid = "";
+      for (let v = lo; v <= hi + step / 1000; v += step) grid += `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--divider-color)" stroke-width="1"/><text x="${L - 6}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--secondary-text-color)">${esc(tick(v))}</text>`;
+      // Zeitachse: runde Uhrzeiten
+      const span = t1 - t0, steps = [3600e3, 2 * 3600e3, 3 * 3600e3, 6 * 3600e3, 12 * 3600e3, 24 * 3600e3, 2 * 24 * 3600e3, 7 * 24 * 3600e3], ti = steps.find((x) => span / x <= 7) || steps[steps.length - 1];
+      const dt = new Date(t0); dt.setMinutes(0, 0, 0); if (ti >= 24 * 3600e3) dt.setHours(0);
+      let xt = "", tt = dt.getTime(); while (tt < t0) tt += ti;
+      for (; tt <= t1; tt += ti) {
+        const dd = new Date(tt), lab = ti >= 24 * 3600e3 ? dd.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) : dd.getHours() === 0 && span > 24 * 3600e3 ? dd.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) : dd.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+        xt += `<line x1="${X(tt).toFixed(1)}" x2="${X(tt).toFixed(1)}" y1="${T}" y2="${T + PH}" stroke="var(--divider-color)" stroke-width="1" stroke-dasharray="2 3"/><text x="${X(tt).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="11" fill="var(--secondary-text-color)">${lab}</text>`;
+      }
+      el.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="touch-action:pan-y;display:block">
+        <defs><clipPath id="cu${el.dataset.wi}"><rect x="${L}" y="${T}" width="${PW}" height="${Math.max(0, Y0 - T).toFixed(1)}"/></clipPath><clipPath id="cd${el.dataset.wi}"><rect x="${L}" y="${Y0.toFixed(1)}" width="${PW}" height="${Math.max(0, T + PH - Y0).toFixed(1)}"/></clipPath></defs>
+        ${grid}${xt}
+        <polygon points="${area}" fill="var(--primary-color)" opacity=".28" clip-path="url(#cu${el.dataset.wi})"/>
+        <polygon points="${area}" fill="#e8833a" opacity=".28" clip-path="url(#cd${el.dataset.wi})"/>
+        <polyline points="${line}" fill="none" stroke="var(--primary-color)" stroke-width="1.6" clip-path="url(#cu${el.dataset.wi})"/>
+        <polyline points="${line}" fill="none" stroke="#e8833a" stroke-width="1.6" clip-path="url(#cd${el.dataset.wi})"/>
+        <line x1="${L}" x2="${W - R}" y1="${Y0.toFixed(1)}" y2="${Y0.toFixed(1)}" stroke="var(--primary-text-color)" stroke-width="1.5"/>
+        <g class="cx" style="display:none"><line y1="${T}" y2="${T + PH}" stroke="var(--primary-text-color)" stroke-width="1" opacity=".6"/><circle r="4" fill="var(--card-background-color)" stroke="var(--primary-text-color)" stroke-width="2"/></g>
+        <rect class="ov" x="${L}" y="${T}" width="${PW}" height="${PH}" fill="transparent"/></svg><div class="tip" style="display:none"></div>`;
+      const svg = el.querySelector("svg"), cx = el.querySelector(".cx"), tip = el.querySelector(".tip");
+      const val = (v) => v.toLocaleString("de-DE", { maximumFractionDigits: unit === "W" ? 0 : 2 }) + (unit ? " " + unit : "");
+      const move = (ev) => {
+        const r = svg.getBoundingClientRect(), x = ev.clientX - r.left;
+        if (x < L || x > W - R) { leave(); return; }
+        const t = t0 + ((x - L) / PW) * (t1 - t0);
+        let a = 0, b2 = pts.length - 1;
+        while (b2 - a > 1) { const m = (a + b2) >> 1; if (pts[m][0] <= t) a = m; else b2 = m; }
+        const pt = pts[a], px = X(t), py = Y(pt[1]);
+        cx.style.display = ""; cx.querySelector("line").setAttribute("x1", px); cx.querySelector("line").setAttribute("x2", px);
+        cx.querySelector("circle").setAttribute("cx", px); cx.querySelector("circle").setAttribute("cy", py);
+        const when = new Date(t);
+        tip.innerHTML = `<b>${esc(val(pt[1]))}</b><br>${esc(when.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" }))} ${esc(when.toLocaleTimeString("de-DE"))}`;
+        tip.style.display = "";
+        const tw = tip.offsetWidth; tip.style.left = Math.min(W - tw - 2, Math.max(2, px + 10)) + "px"; tip.style.top = Math.max(0, py - 44) + "px";
+      };
+      const leave = () => { cx.style.display = "none"; tip.style.display = "none"; };
+      svg.addEventListener("pointermove", move); svg.addEventListener("pointerdown", move); svg.addEventListener("pointerleave", leave);
+    });
   }
 
   async _loadHistory() {
@@ -636,7 +695,7 @@ class OmniBatteryDashboard extends HTMLElement {
       .dl span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.dl b{white-space:nowrap}
       .bar{height:6px;border-radius:3px;background:var(--divider-color);margin-top:3px}
       .bar i{display:block;height:100%;border-radius:3px;background:var(--primary-color)}
-      .hist{width:100%;height:90px}
+      .chart{position:relative}.tip{position:absolute;pointer-events:none;background:var(--card-background-color);color:var(--primary-text-color);border:1px solid var(--divider-color);border-radius:8px;padding:5px 9px;font-size:.8em;line-height:1.35;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap;z-index:2}
       .tt{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px}
       .tt button{padding:4px 10px;border-radius:14px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer;font:inherit;font-size:.85em}
       .dev.hid{opacity:.5}.dl label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
@@ -667,6 +726,7 @@ class OmniBatteryDashboard extends HTMLElement {
     R(".tf", "click", () => { this._showHidden = !this._showHidden; this._topCache = {}; this._sig = ""; this._render(); });
     R(".tr", "click", () => { this._hideSet().clear(); this._saveHide(); this._topCache = {}; this._sig = ""; this._render(); });
     this.shadowRoot.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => this._setPeriod(b.dataset.p)));
+    this._drawCharts();
   }
 }
 
