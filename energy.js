@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.16.0";
+const OB_VERSION = "0.16.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -23,7 +23,7 @@ const LABELS = {
   battery: "Batterie (+ = Laden; Entlade-Sensor mit „abziehen“ markieren)",
   home: "Hausverbrauch (mehrere Sensoren werden addiert; leer = berechnen)",
   invert_grid: "Netz-Vorzeichen umkehren (wenn Einspeisung als Bezug angezeigt wird)", invert_battery: "Batterie-Vorzeichen umkehren",
-  count: "Anzahl der Einträge (Standard 10)", include_sources: "Quellen (Solar/Netz/Batterie aus den Energiefluss-/Batterie-Widgets) ebenfalls anzeigen",
+  count: "Anzahl der Einträge (Standard 10, bis 1000; lange Listen scrollen)", include_sources: "Quellen (Solar/Netz/Batterie aus den Energiefluss-/Batterie-Widgets) ebenfalls anzeigen",
   deduct: "Von „nicht zugeordnet“ abziehen (andere Bereiche, z. B. anderes Haus, Wallbox)", entity: "Entität", exclude: "Ignorieren (diese Sensoren nicht mitzählen, optional)", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte / Entitäten",
   max: "Maximalwert für Balken (leer = automatisch)", hours: "Zeitraum (Stunden)",
 };
@@ -53,7 +53,7 @@ const SCHEMAS = {
   devices: [NAME, { name: "entities", selector: { entity: { multiple: true } }, _f: "entities" },
     { name: "max", selector: { number: { min: 0, mode: "box" } } }, WIDTH],
   balance: [NAME, MULTI("entities"), MULTI("exclude"), WIDTH],
-  top: [NAME, { name: "count", selector: { number: { min: 1, max: 50, mode: "box" } } }, MULTI("exclude"), BOOL("include_sources"), WIDTH],
+  top: [NAME, { name: "count", selector: { number: { min: 1, max: 1000, mode: "box" } } }, MULTI("exclude"), BOOL("include_sources"), WIDTH],
   history: [NAME, ENT("entity"), { name: "hours", selector: { number: { min: 1, max: 168, mode: "box" } } }, WIDTH],
 };
 
@@ -394,7 +394,7 @@ class OmniBatteryDashboard extends HTMLElement {
   _top(w) {
     const rows = this._topRows(w), max = Math.max(1e-9, ...rows.map((r) => r.v));
     if (this._period !== "now" && !this._statIdList) return `<div class="sub">Lade Statistik …</div>`;
-    return `<div class="devs">${rows.map((r, i) => `
+    return `<div class="devs${rows.length > 12 ? " long" : ""}">${rows.map((r, i) => `
       <div class="dev"><div class="dl"><span title="${esc(r.id)}">${i + 1}. ${esc(this._label(w, r.id))}</span><b>${esc(this._fmtW(r.v))}</b></div>
       <div class="bar"><i style="width:${Math.min(100, r.v / max * 100)}%"></i></div></div>`).join("") || '<div class="sub">Keine Verbraucher gefunden.</div>'}</div>
       ${rows.length ? `<div class="sub" style="margin-top:6px">Summe Top ${rows.length}: ${esc(this._fmtW(rows.reduce((a, r) => a + r.v, 0)))}${w.include_sources ? "" : " · Quellen ausgeblendet"}</div>` : ""}`;
@@ -556,6 +556,7 @@ class OmniBatteryDashboard extends HTMLElement {
       .bar{height:6px;border-radius:3px;background:var(--divider-color);margin-top:3px}
       .bar i{display:block;height:100%;border-radius:3px;background:var(--primary-color)}
       .hist{width:100%;height:90px}
+      .devs.long{max-height:520px;overflow-y:auto;padding-right:6px}
       .bal{font-size:.92em}.bsec{margin:8px 0 2px;font-size:.8em;text-transform:uppercase;letter-spacing:.04em;color:var(--secondary-text-color)}
       .brow{display:flex;justify-content:space-between;gap:8px;padding:2px 0}.brow span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .brow b{white-space:nowrap}.brow.sub{font-size:.8em;color:var(--secondary-text-color);padding-left:10px}.brow.sub b{font-weight:500}.brow.tot{border-top:1px solid var(--divider-color);margin-top:4px;padding-top:4px;font-weight:600}
