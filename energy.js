@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.16.1";
+const OB_VERSION = "0.17.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -23,7 +23,7 @@ const LABELS = {
   battery: "Batterie (+ = Laden; Entlade-Sensor mit „abziehen“ markieren)",
   home: "Hausverbrauch (mehrere Sensoren werden addiert; leer = berechnen)",
   invert_grid: "Netz-Vorzeichen umkehren (wenn Einspeisung als Bezug angezeigt wird)", invert_battery: "Batterie-Vorzeichen umkehren",
-  count: "Anzahl der Einträge (Standard 10, bis 1000; lange Listen scrollen)", include_sources: "Quellen (Solar/Netz/Batterie aus den Energiefluss-/Batterie-Widgets) ebenfalls anzeigen",
+  refresh_s: "Aktualisierung alle … Sekunden (Standard 5, nur Ansicht „Aktuell“)", count: "Anzahl der Einträge (Standard 10, bis 1000; lange Listen scrollen)", include_sources: "Quellen (Solar/Netz/Batterie aus den Energiefluss-/Batterie-Widgets) ebenfalls anzeigen",
   deduct: "Von „nicht zugeordnet“ abziehen (andere Bereiche, z. B. anderes Haus, Wallbox)", entity: "Entität", exclude: "Ignorieren (diese Sensoren nicht mitzählen, optional)", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte / Entitäten",
   max: "Maximalwert für Balken (leer = automatisch)", hours: "Zeitraum (Stunden)",
 };
@@ -53,7 +53,7 @@ const SCHEMAS = {
   devices: [NAME, { name: "entities", selector: { entity: { multiple: true } }, _f: "entities" },
     { name: "max", selector: { number: { min: 0, mode: "box" } } }, WIDTH],
   balance: [NAME, MULTI("entities"), MULTI("exclude"), WIDTH],
-  top: [NAME, { name: "count", selector: { number: { min: 1, max: 1000, mode: "box" } } }, MULTI("exclude"), BOOL("include_sources"), WIDTH],
+  top: [NAME, { name: "count", selector: { number: { min: 1, max: 1000, mode: "box" } } }, { name: "refresh_s", selector: { number: { min: 1, max: 3600, mode: "box", unit_of_measurement: "s" } } }, MULTI("exclude"), BOOL("include_sources"), WIDTH],
   history: [NAME, ENT("entity"), { name: "hours", selector: { number: { min: 1, max: 168, mode: "box" } } }, WIDTH],
 };
 
@@ -86,6 +86,7 @@ class OmniBatteryDashboard extends HTMLElement {
       this._period = PERIODS[st] ? st : PERIODS[config.default_period] ? config.default_period : "now";
     }
     this._sig = "";
+    this._topCache = {};
     this._render();
   }
 
@@ -374,6 +375,16 @@ class OmniBatteryDashboard extends HTMLElement {
   }
   /** Sortierte Verbraucher aller Sensoren des Systems (W in „Aktuell“, kWh in den Zeiträumen) */
   _topRows(w) {
+    if (this._period !== "now") return this._topCompute(w);
+    // Momentaufnahme, höchstens alle refresh_s Sekunden neu berechnet
+    if (!this._hass) return [];
+    const key = (this._config?.widgets || []).indexOf(w), c = (this._topCache ||= {})[key];
+    if (c && (Date.now() - c.ts) / 1000 < (w.refresh_s || 5)) return c.rows;
+    const rows = this._topCompute(w);
+    this._topCache[key] = { ts: Date.now(), rows };
+    return rows;
+  }
+  _topCompute(w) {
     const now = this._period === "now", ex = new Set([...this._ids(w.exclude), VIRT]);
     if (!w.include_sources) {
       for (const x of this._config?.widgets || []) {
