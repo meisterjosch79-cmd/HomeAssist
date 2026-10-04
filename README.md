@@ -90,6 +90,12 @@ Das Widget **Top-Verbraucher** durchsucht alle Sensoren im System (nicht nur die
   (braucht Administratorrechte und ein Dashboard im Storage-Modus, nicht YAML). Ist ein Sensor schon zugeordnet, steht stattdessen „✓ Widgetname“.
 - „Aktuell“ ist eine **Momentaufnahme** der aktuellen Sensorwerte (kein Mittelwert). Die Liste wird höchstens alle *refresh_s* Sekunden neu berechnet (Standard 5, im Editor einstellbar).
 
+## Live-Abfrage (z. B. Marstek)
+Manche Integrationen aktualisieren ihre Sensoren nur in festen Abständen (Marstek: Batterie-Werte alle 60 s, CT/PV alle 300 s). Im Editor kannst du unter
+**„Live-Abfrage alle … Sekunden“** einstellen, dass die Karte einen Home-Assistant-Dienst regelmäßig aufruft (Standard: `marstek_local_api.request_data_sync`).
+Das passiert nur, **solange das Dashboard im Browser offen und sichtbar ist** (mindestens 5 Sekunden Abstand), also ohne dauerhafte Automatisierung.
+Beginne mit 15–30 Sekunden, sehr kurze Abstände können die Batterie belasten.
+
 ## Widgets
 | Typ | Zweck |
 |---|---|

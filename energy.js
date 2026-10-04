@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.18.1";
+const OB_VERSION = "0.19.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -90,6 +90,7 @@ class OmniBatteryDashboard extends HTMLElement {
     this._sig = "";
     this._topCache = {};
     this._render();
+    this._startPoll();
   }
 
   set hass(hass) {
@@ -107,6 +108,22 @@ class OmniBatteryDashboard extends HTMLElement {
     }
     this._loadHistory();
     this._loadStats();
+  }
+
+  connectedCallback() { this._startPoll(); }
+  disconnectedCallback() { clearInterval(this._pollTimer); this._pollTimer = null; }
+  /** Live-Abfrage: ruft einen Home-Assistant-Dienst (z. B. Marstek „Daten sofort abfragen“) regelmäßig auf, solange das Dashboard offen ist */
+  _startPoll() {
+    clearInterval(this._pollTimer); this._pollTimer = null;
+    const sec = Number(this._config?.poll_s), svc = String(this._config?.poll_service || "marstek_local_api.request_data_sync");
+    if (!(sec >= 5) || !svc.includes(".") || !this.isConnected) return;
+    const [dom, name] = svc.split(".");
+    this._pollTimer = setInterval(async () => {
+      if (document.visibilityState !== "visible" || this._pollBusy || !this._hass) return;
+      this._pollBusy = true;
+      try { await this._hass.callService(dom, name, {}); this._pollErr = ""; } catch (e) { this._pollErr = "Live-Abfrage fehlgeschlagen: " + (e?.message || "Dienst nicht gefunden"); this._render(); }
+      this._pollBusy = false;
+    }, sec * 1000);
   }
 
   getCardSize() { return 3 + (this._config?.widgets?.length || 0); }
@@ -640,7 +657,7 @@ class OmniBatteryDashboard extends HTMLElement {
     </style>
     <ha-card><div class="wrap">${this._config.title ? `<div class="title">${esc(this._config.title)}</div>` : ""}${seg}
       <div class="grid">${body || '<div class="sub">Noch keine Widgets – Karte bearbeiten und Widgets hinzufügen.</div>'}</div>
-      ${this._config.show_update === false ? "" : `<div class="upd"><span>OmniBattery v${OB_VERSION}</span><button id="upd">⟳ Update</button><span>${esc(this._ust || "")}</span></div>`}
+      ${this._config.show_update === false ? "" : `<div class="upd"><span>OmniBattery v${OB_VERSION}</span><button id="upd">⟳ Update</button><span>${esc(this._ust || this._pollErr || "")}</span>${Number(this._config.poll_s) >= 5 ? `<span>⟳ Live-Abfrage alle ${Number(this._config.poll_s)} s</span>` : ""}</div>`}
       </div></ha-card>`;
     this.shadowRoot.getElementById("upd")?.addEventListener("click", () => this._update());
     const R = (sel, ev, fn) => this.shadowRoot.querySelectorAll(sel).forEach((el) => el.addEventListener(ev, () => fn(el)));
@@ -969,6 +986,8 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       <label>Titel</label><input class="t" id="title" value="${esc(this._config.title)}">
       <label><input type="checkbox" id="flt" ${this._filterOn === false ? "" : "checked"}> Sensorliste vorfiltern (Leistung / Batterie)</label>
       <label><input type="checkbox" id="sp" ${this._config.show_periods === false ? "" : "checked"}> Zeitraum-Umschalter (Aktuell / Tag / Woche / Monat / Jahr) anzeigen</label><br>
+      <div class="row" style="margin:6px 0"><span>Live-Abfrage alle</span> <input class="t" id="ps" type="number" min="0" step="5" style="width:90px" value="${esc(this._config.poll_s || "")}" placeholder="0 = aus"> <span>Sekunden, nur solange das Dashboard offen ist</span></div>
+      <div class="row" style="margin:0 0 6px"><span>Dienst dafür</span> <input class="t" id="psv" style="width:100%;max-width:340px" value="${esc(this._config.poll_service || "")}" placeholder="marstek_local_api.request_data_sync"></div>
       <label><input type="checkbox" id="su" ${this._config.show_update === false ? "" : "checked"}> Update-Button in der Karte anzeigen</label>
       <div id="list"></div>
       <div class="row"><select id="newtype">${Object.entries(WIDGET_TYPES).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join("")}</select>
@@ -981,6 +1000,9 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       if (e.target.checked) delete this._config.show_periods; else this._config.show_periods = false;
       this._emit();
     });
+    const setNum = (k, v) => { if (v === "" || !(Number(v) > 0)) delete this._config[k]; else this._config[k] = Number(v); this._emit(); };
+    this.querySelector("#ps").addEventListener("input", (e) => setNum("poll_s", e.target.value));
+    this.querySelector("#psv").addEventListener("input", (e) => { if (e.target.value.trim()) this._config.poll_service = e.target.value.trim(); else delete this._config.poll_service; this._emit(); });
     this.querySelector("#su").addEventListener("change", (e) => {
       if (e.target.checked) delete this._config.show_update; else this._config.show_update = false;
       this._emit();
