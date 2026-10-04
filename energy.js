@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.15.0";
+const OB_VERSION = "0.15.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -320,13 +320,14 @@ class OmniBatteryDashboard extends HTMLElement {
       return `<div class="brow sub"><span title="${esc(id)}">↳ ${esc(this._label(m.roles[role].get(id).wd, id))}</span><b>${esc(t)}</b></div>`;
     }).join("");
     return `<div class="bal">
-      <div class="bsec">Zufluss</div>
+      <div class="bsec">Hausverbrauch aus den Quellen</div>
+      <div class="sub">Solar + Netzbezug + Batterie-Entladung − Einspeisung − Batterie-Ladung</div>
       ${m.solar !== null ? row("☀️ Solar", m.solar) + src("solar", 1) : ""}
       ${m.grid !== null ? row(m.grid >= 0 ? "🏭 Netzbezug" : "🏭 Einspeisung (netto)", m.grid) + src("grid", 1) : ""}
       ${batIn !== null ? row(batIn >= 0 ? "🔋 Batterie entlädt" : "🔋 Batterie lädt (netto)", batIn) + src("battery", -1) : ""}
-      ${row("Summe verfügbar", supply, "tot")}
+      ${row("= Hausverbrauch (berechnet)", supply, "tot")}
       ${home !== undefined ? `<div class="sub">Gemessener Hausverbrauch (Energiefluss): ${esc(this._fmtW(home))}</div>` : ""}
-      <div class="bsec">Verbraucher (${rows.length})</div>
+      <div class="bsec">Davon erklärt durch Verbraucher (${rows.length})</div>
       ${sorted.map((r) => `<div class="brow"><span title="${esc(r.id)}">${esc(this._label(r.wd, r.id))}</span><b>${esc(r.v === null ? "–" : this._fmtW(r.v))}</b></div>
         ${r.v !== null ? `<div class="bar"><i style="width:${Math.min(100, Math.abs(r.v) / max * 100)}%"></i></div>` : ""}`).join("") || '<div class="sub">Noch keine Verbraucher: Sensoren im <b>Geräteverbrauch</b>-Widget werden automatisch übernommen.</div>'}
       ${uncounted ? `<div class="sub">${uncounted} Zähler ohne Leistungswert sind in „Aktuell“ nicht eingerechnet (nur Tag–Jahr).</div>` : ""}
