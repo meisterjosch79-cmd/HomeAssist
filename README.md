@@ -66,6 +66,18 @@ Im Energiefluss-Widget gibt es das Feld **„Von ‚nicht zugeordnet‘ abziehen
 zählen als Verbraucher der Energiebilanz. Sie verkleinern die nicht zugeordnete Energiemenge und den virtuellen Sensor, ohne in der Haus-Kachel selbst zu erscheinen.
 Im Bilanz-Widget werden sie unter „Verbraucher“ aufgeführt.
 
+## Helfer anlegen (virtuelle Sensoren)
+Im Karten-Editor gibt es ganz unten die Sektion **„🧮 Helfer anlegen“**. Ein Helfer kombiniert mehrere Sensoren zu einem neuen Wert:
+
+- Sensoren auswählen; Sensoren **ohne Haken werden addiert**, mit **Haken „Wert abziehen“ subtrahiert**.
+- Der Helfer steht danach in **allen Sensor-Listen** der Karte (Auswahlfenster, ganz oben unter „Helfer“) und verhält sich wie ein Sensor:
+  in Energiefluss, Geräteliste, Bilanz, „abziehen“-Feld usw., auch bei Tag/Woche/Monat/Jahr (aus den Statistiken der Einzelsensoren).
+- Im Editor wird der aktuelle Wert des Helfers angezeigt.
+- **➕ In Home Assistant anlegen** erstellt zusätzlich einen echten Template-Sensor (Helfer) in Home Assistant (Einheit W bzw. kWh),
+  den du auch außerhalb der Karte nutzen kannst. Das braucht Administratorrechte. Klappt es nicht, zeigt **📋 Vorlage anzeigen**
+  die fertige Template-Vorlage zum Einfügen unter *Einstellungen → Geräte & Dienste → Helfer → Template → Sensor*.
+- Leistungs- und Energiesensoren lassen sich in einem Helfer nicht mischen.
+
 ## Widgets
 | Typ | Zweck |
 |---|---|

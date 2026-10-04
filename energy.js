@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.14.0";
+const OB_VERSION = "0.15.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -56,6 +56,8 @@ const SCHEMAS = {
 
 // Virtueller Sensor: "Nicht zugeordnete Energiemenge" aus der Energiebilanz, nutzbar in Geräteliste und Hausverbrauch
 const VIRT = "virtual:unassigned", VIRT_NAME = "Nicht zugeordnete Energiemenge";
+// Helfer = vom Nutzer definierte virtuelle Sensoren (Summe/Differenz mehrerer Sensoren), Id "virtual:helper:<id>"
+const HELP_PREFIX = "virtual:helper:";
 const PERIODS = { now: "Aktuell", day: "Tag", week: "Woche", month: "Monat", year: "Jahr" };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -103,11 +105,12 @@ class OmniBatteryDashboard extends HTMLElement {
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "deduct"]) ids.push(...this._ids(w[k]));
       if (Array.isArray(w.entities)) ids.push(...w.entities);
     }
+    for (const h of this._config?.helpers || []) ids.push(...this._ids(h.entities));
     return ids;
   }
 
   /** Anzeigename eines Sensors im Widget (eigener Name oder Entity-Name) */
-  _label(w, id) { return w.names?.[id] || (id === VIRT ? VIRT_NAME + " (virtuell)" : null) || this._st(id)?.attributes?.friendly_name || id; }
+  _label(w, id) { return w.names?.[id] || (id === VIRT ? VIRT_NAME + " (virtuell)" : null) || this._helper(id)?.name || this._st(id)?.attributes?.friendly_name || id; }
   /** Kleine Einzelwerte aller Sensoren eines Widget-Feldes */
   _parts(w, ids, always = false) {
     ids = ids.filter(Boolean);
@@ -115,6 +118,7 @@ class OmniBatteryDashboard extends HTMLElement {
     return `<div class="parts">${ids.map((id) => `<div><span title="${esc(id)}">${esc(this._label(w, id))}</span><b>${esc((w.signs?.[id] === -1 ? "− " : "") + this._fmtW(this._watts(id)))}</b></div>`).join("")}</div>`;
   }
   _ids(v) { return Array.isArray(v) ? v : v ? [v] : []; }
+  _helper(id) { return typeof id === "string" && id.startsWith(HELP_PREFIX) ? (this._config?.helpers || []).find((h) => h.id === id.slice(HELP_PREFIX.length)) : null; }
   _isEnergy(id) {
     const a = this._st(id)?.attributes || {};
     return ["Wh", "kWh", "MWh"].includes(a.unit_of_measurement) || a.device_class === "energy";
@@ -122,7 +126,7 @@ class OmniBatteryDashboard extends HTMLElement {
   /** Sensoren eines Feldes, die im aktuellen Zeitraum zählen:
    *  Aktuell = nur Leistungssensoren; Tag/Woche/Monat/Jahr = Energiezähler, sonst Leistung (Statistik-Mittelwert × Zeit). */
   _use(v) {
-    const ids = this._ids(v), en = ids.filter((i) => this._isEnergy(i)), virt = ids.filter((i) => i === VIRT);
+    const ids = this._ids(v), en = ids.filter((i) => this._isEnergy(i)), virt = ids.filter((i) => i === VIRT || String(i).startsWith(HELP_PREFIX));
     if (this._period === "now") return ids.filter((i) => !this._isEnergy(i));
     return en.length ? [...en, ...virt] : ids;
   }
@@ -142,6 +146,15 @@ class OmniBatteryDashboard extends HTMLElement {
   /** Wert in Watt, berücksichtigt kW/MW */
   _watts(id) {
     if (id === VIRT) return this._unassigned();
+    const hp = this._helper(id);
+    if (hp) {  // Helfer: Komponenten addieren bzw. (bei „abziehen“) subtrahieren
+      let t = null;
+      for (const c of this._use((hp.entities || []).filter((x) => !String(x).startsWith("virtual:")))) {
+        const v = this._watts(c);
+        if (v !== null) t = (t || 0) + (hp.signs?.[c] === -1 ? -v : v);
+      }
+      return t;
+    }
     if (this._period !== "now") return this._stat?.[this._period]?.[id] ?? null;  // kWh aus Statistik
     if (this._isEnergy(id)) return null;
     const v = this._num(id); if (v === null) return null;
@@ -382,6 +395,10 @@ class OmniBatteryDashboard extends HTMLElement {
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities"]) this._use(w[k]).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.deduct).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.entities).forEach((i) => ids.add(i));
+    for (const id of [...ids]) {  // Helfer durch ihre Komponenten ersetzen
+      const hp = this._helper(id);
+      if (hp) { ids.delete(id); this._use(hp.entities || []).forEach((i) => ids.add(i)); }
+    }
     ids.delete(VIRT);
     if (!ids.size) return;
     this._statBusy = true; this._loading = !this._stat[p]; if (this._loading) this._render();
@@ -572,20 +589,23 @@ class ObEntityPicker extends HTMLElement {
     this._renderHead();
   }
 
+  _hp(id) { return String(id).startsWith(HELP_PREFIX) ? (this._opts?.getHelpers?.() || []).find((x) => x.id === id) || { id, name: "Helfer (gelöscht)" } : null; }
   _val(id) {
-    if (id === VIRT) return "berechnet";
+    if (id === VIRT || String(id).startsWith(HELP_PREFIX)) return "berechnet";
     const st = this._hass?.states?.[id]; if (!st) return "n/a";
     try { if (this._hass.formatEntityState) return this._hass.formatEntityState(st); } catch (e) { /* fallback */ }
     return `${st.state} ${st.attributes.unit_of_measurement || ""}`.trim();
   }
   _devName(id) {
     if (id === VIRT) return "Virtuell";
+    if (String(id).startsWith(HELP_PREFIX)) return "Helfer";
     const did = this._hass?.entities?.[id]?.device_id;
     const d = did && this._hass.devices?.[did];
     return d ? d.name_by_user || d.name || did : "";
   }
   _entName(id) {
     if (id === VIRT) return VIRT_NAME;
+    if (String(id).startsWith(HELP_PREFIX)) return this._hp(id).name;
     const n = this._hass?.states?.[id]?.attributes?.friendly_name || id;
     const dn = this._devName(id);
     return dn && n.startsWith(dn + " ") ? n.slice(dn.length + 1) : n;
@@ -600,8 +620,9 @@ class ObEntityPicker extends HTMLElement {
     const o = this._all ? {} : this._opts || {}, st = this._hass?.states || {};
     const list = Object.keys(st);
     if (this._opts?.virtual && this._minW == null) list.unshift(VIRT);
+    if (this._opts?.getHelpers && this._minW == null) list.unshift(...this._opts.getHelpers().map((x) => x.id));
     return list.filter((id) => {
-      if (id === VIRT) return true;
+      if (id === VIRT || id.startsWith(HELP_PREFIX)) return true;
       if (o.domain && !id.startsWith(o.domain + ".")) return false;
       const a = st[id].attributes;
       if (this._minW != null) { const w = this._wattsOf(id); if (w === null || w < this._minW) return false; }
@@ -614,7 +635,7 @@ class ObEntityPicker extends HTMLElement {
     const h = this.querySelector(".head"); if (!h) return;
     const rows = this._arr().map((id) => `<div class="sel"><div class="n">${esc(this._entName(id))} <small>${esc(this._devName(id))}</small></div>
       <span class="v" data-v="${esc(id)}">${esc(this._val(id))}</span><span class="x" data-rm="${esc(id)}" title="Entfernen">✕</span>
-      <input class="nm" data-nm="${esc(id)}" placeholder="Anzeigename (optional)" value="${esc(this._names?.[id] || "")}">
+      ${this._opts.noNames ? "" : `<input class="nm" data-nm="${esc(id)}" placeholder="Anzeigename (optional)" value="${esc(this._names?.[id] || "")}">`}
       ${this._opts.multiple ? `<label class="sg"><input type="checkbox" data-sg="${esc(id)}" ${this._signs?.[id] === -1 ? "checked" : ""}> Wert abziehen (−), z. B. separater Entlade-Sensor</label>` : ""}</div>`).join("");
     h.innerHTML = rows + (this._opts.multiple || !this._arr().length
       ? `<button data-open>${this._opts.multiple ? "+ Sensor hinzufügen" : "Sensor auswählen …"}</button>`
@@ -657,6 +678,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   set hass(h) {
     this._hass = h;
     this.querySelectorAll("ha-form, ob-entity-picker").forEach((f) => (f.hass = h));
+    (this._hnow || []).forEach(({ i, el }) => { const hp = this._config?.helpers?.[i]; if (hp) el.textContent = this._helperNow(hp); });
   }
 
   _fields(type) {
@@ -665,6 +687,120 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       const flt = isEnt && this._filterOn !== false ? FILTERS[f._f] : null;
       return { name: f.name, schema: f, isEnt, multiple: !!f.selector?.entity?.multiple, domain: flt?.[0] || null, classes: flt?.[1] || null, units: flt?.[2] || null };
     });
+  }
+
+  _helperList() { return (this._config.helpers || []).map((h) => ({ id: HELP_PREFIX + h.id, name: h.name || "Helfer" })); }
+
+  /** Template-Definition für einen echten Home-Assistant-Helfer (Template-Sensor) aus den Komponenten */
+  _helperTemplate(h) {
+    const st = this._hass?.states || {}, comps = h.entities || [];
+    if (!comps.length) return { error: "Keine Sensoren gewählt." };
+    const kind = (id) => { const a = st[id]?.attributes || {}; return ["Wh", "kWh", "MWh"].includes(a.unit_of_measurement) || a.device_class === "energy" ? "energy" : "power"; };
+    const kinds = new Set(comps.map(kind));
+    if (kinds.size > 1) return { error: "Der Helfer mischt Leistung (W) und Energie (kWh). Bitte getrennt anlegen." };
+    const energy = kinds.has("energy");
+    const factor = (id) => { const u = st[id]?.attributes?.unit_of_measurement; return energy ? (u === "Wh" ? 0.001 : u === "MWh" ? 1000 : 1) : (u === "kW" ? 1000 : u === "MW" ? 1e6 : 1); };
+    const terms = comps.map((id, k) => `${h.signs?.[id] === -1 ? "- " : k ? "+ " : ""}(states('${id}') | float(0) * ${factor(id)})`).join(" ");
+    return { template: `{{ (${terms}) | round(${energy ? 3 : 1}) }}`, unit: energy ? "kWh" : "W", dc: energy ? "energy" : "power", sc: energy ? "total" : "measurement" };
+  }
+
+  /** Aktueller Wert des Helfers (nur Anzeige im Editor) */
+  _helperNow(h) {
+    const t = this._helperTemplate(h); if (t.error) return "";
+    const st = this._hass?.states || {};
+    let sum = 0, any = false;
+    for (const id of h.entities || []) {
+      const a = st[id]?.attributes || {}, v = parseFloat(st[id]?.state);
+      if (isNaN(v)) continue;
+      const u = a.unit_of_measurement, f = t.unit === "W" ? (u === "kW" ? 1000 : u === "MW" ? 1e6 : 1) : (u === "Wh" ? 0.001 : u === "MWh" ? 1000 : 1);
+      sum += v * f * (h.signs?.[id] === -1 ? -1 : 1); any = true;
+    }
+    return any ? `Aktuell: ${Math.abs(sum) >= 100 ? sum.toFixed(0) : sum.toFixed(2)} ${t.unit}` : "";
+  }
+
+  async _createInHA(h, out) {
+    const t = this._helperTemplate(h);
+    if (t.error) { out.textContent = t.error; return; }
+    if (!h.name) { out.textContent = "Bitte zuerst einen Namen vergeben."; return; }
+    out.textContent = "Lege Helfer in Home Assistant an …";
+    try {
+      let r = await this._hass.callApi("POST", "config/config_entries/flow", { handler: "template", show_advanced_options: false });
+      if (r.type === "menu") r = await this._hass.callApi("POST", `config/config_entries/flow/${r.flow_id}`, { next_step_id: "sensor" });
+      if (r.type !== "form") throw new Error("unerwarteter Ablauf: " + r.type);
+      r = await this._hass.callApi("POST", `config/config_entries/flow/${r.flow_id}`, {
+        name: h.name, state: t.template, unit_of_measurement: t.unit, device_class: t.dc, state_class: t.sc,
+      });
+      if (r.type === "form" && r.errors && Object.keys(r.errors).length) throw new Error(JSON.stringify(r.errors));
+      if (r.type !== "create_entry") throw new Error("nicht angelegt (" + r.type + ")");
+      const slug = h.name.toLowerCase().replace(/ä/g, "a").replace(/ö/g, "o").replace(/ü/g, "u").replace(/ß/g, "ss").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      out.textContent = `Angelegt: sensor.${slug} (prüfen unter Einstellungen → Geräte & Dienste → Helfer).`;
+    } catch (e) {
+      out.textContent = "Anlegen fehlgeschlagen: " + (e?.message || e?.body?.message || JSON.stringify(e)) + " – nutze „Vorlage anzeigen“ und lege den Helfer manuell an.";
+    }
+  }
+
+  _buildHelpers() {
+    const host = this.querySelector("#hsec"); if (!host) return;
+    const hs = this._config.helpers || [];
+    this._hnow = [];
+    const sec = document.createElement("details");
+    sec.open = !!this._hopen;
+    sec.addEventListener("toggle", () => { this._hopen = sec.open; });
+    sec.innerHTML = `<summary>🧮 Helfer anlegen (virtuelle Sensoren)</summary>
+      <div class="sub" style="margin:6px 0">Kombiniere mehrere Sensoren zu einem neuen Wert: addieren oder (Haken „abziehen“) subtrahieren. Der Helfer erscheint in allen Sensor-Listen unter „Helfer“ und verhält sich wie ein Sensor – auch bei Tag/Woche/Monat/Jahr.</div>`;
+    const updH = (i, patch, rebuild) => {
+      this._config.helpers = (this._config.helpers || []).map((x, j) => (j === i ? { ...x, ...patch } : x));
+      this._config.helpers.forEach((x) => { if (x.signs && !Object.keys(x.signs).length) delete x.signs; });
+      this._emit();
+      if (rebuild) this._build();
+    };
+    hs.forEach((h, i) => {
+      const d = document.createElement("details");
+      d.open = !!this._hopenI?.has(h.id);
+      d.addEventListener("toggle", () => { (this._hopenI ||= new Set())[d.open ? "add" : "delete"](h.id); });
+      d.innerHTML = `<summary>${esc(h.name || "Neuer Helfer")}</summary>
+        <label>Name</label><input class="t hn" value="${esc(h.name || "")}" placeholder="z. B. Verbrauch Werkstatt">`;
+      const now = document.createElement("div"); now.className = "sub"; now.textContent = this._helperNow(h); this._hnow.push({ i, el: now });
+      d.querySelector(".hn").addEventListener("input", (e) => {
+        updH(i, { name: e.target.value });
+        d.querySelector("summary").textContent = e.target.value || "Neuer Helfer";
+      });
+      const pk = document.createElement("ob-entity-picker");
+      pk.options = { label: "Sensoren (ohne Haken: addieren, mit Haken: abziehen)", multiple: true, noNames: true, domain: "sensor", classes: ["power", "energy"], units: U_POWER };
+      pk.value = h.entities; pk.signs = h.signs; pk.hass = this._hass;
+      pk.addEventListener("picked", (ev) => { ev.stopPropagation(); updH(i, { entities: ev.detail.value }); now.textContent = this._helperNow(this._config.helpers[i]); });
+      pk.addEventListener("signed", (ev) => {
+        ev.stopPropagation();
+        const signs = { ...(this._config.helpers[i].signs || {}) };
+        if (ev.detail.neg) signs[ev.detail.id] = -1; else delete signs[ev.detail.id];
+        updH(i, { signs }); now.textContent = this._helperNow(this._config.helpers[i]);
+      });
+      const out = document.createElement("div"); out.className = "sub";
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = `<button data-a="ha">➕ In Home Assistant anlegen</button><button data-a="tpl">📋 Vorlage anzeigen</button><button data-a="del">🗑 Entfernen</button>`;
+      row.addEventListener("click", (ev) => {
+        const a = ev.target.dataset?.a; if (!a) return;
+        if (a === "del") { this._config.helpers = this._config.helpers.filter((_, j) => j !== i); if (!this._config.helpers.length) delete this._config.helpers; this._emit(); this._build(); }
+        if (a === "ha") this._createInHA(this._config.helpers[i], out);
+        if (a === "tpl") {
+          const t = this._helperTemplate(this._config.helpers[i]);
+          out.innerHTML = t.error ? esc(t.error) : `Einstellungen → Geräte & Dienste → Helfer → Helfer erstellen → Template → <b>Sensor</b>, Zustandsvorlage:<br><textarea readonly rows="4" style="width:100%;box-sizing:border-box">${esc(t.template)}</textarea>Einheit: <b>${t.unit}</b>, Geräteklasse: <b>${t.dc}</b>, Zustandsklasse: <b>${t.sc}</b>`;
+        }
+      });
+      d.append(pk, now, row, out);
+      sec.appendChild(d);
+    });
+    const add = document.createElement("button");
+    add.textContent = "+ Helfer hinzufügen";
+    add.addEventListener("click", () => {
+      const id = "h" + Date.now().toString(36);
+      this._config.helpers = [...(this._config.helpers || []), { id, name: "", entities: [] }];
+      (this._hopenI ||= new Set()).add(id); this._hopen = true;
+      this._emit(); this._build();
+    });
+    const wrap = document.createElement("div"); wrap.className = "row"; wrap.appendChild(add);
+    sec.appendChild(wrap);
+    host.appendChild(sec);
   }
 
   _emit() {
@@ -690,6 +826,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       <div id="list"></div>
       <div class="row"><select id="newtype">${Object.entries(WIDGET_TYPES).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join("")}</select>
         <button id="add">+ Widget hinzufügen</button></div>
+      <div id="hsec"></div>
       <div class="row" style="opacity:.8;font-size:.85em">Version ${OB_VERSION} <button id="reload">↻ Neu laden</button></div></div>`;
     this.querySelector("#reload").addEventListener("click", () => location.reload());
     this.querySelector("#title").addEventListener("input", (e) => { this._config.title = e.target.value; this._emit(); });
@@ -706,6 +843,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       this._config.widgets = [...ws, { type: this.querySelector("#newtype").value }];
       this._emit(); this._build();
     });
+    this._buildHelpers();
     const list = this.querySelector("#list");
     ws.forEach((w, i) => {
       const d = document.createElement("details");
@@ -736,7 +874,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       d.appendChild(form);
       for (const f of fields.filter((x) => x.isEnt)) {
         const pk = document.createElement("ob-entity-picker");
-        pk.options = { virtual: f.name === "home" || (f.name === "entities" && w.type === "devices"), label: LABELS_T[w.type]?.[f.name] || LABELS[f.name] || f.name, multiple: f.multiple, domain: f.domain, classes: f.classes, units: f.units };
+        pk.options = { getHelpers: f.name === "exclude" ? null : () => this._helperList(), virtual: f.name === "home" || (f.name === "entities" && w.type === "devices"), label: LABELS_T[w.type]?.[f.name] || LABELS[f.name] || f.name, multiple: f.multiple, domain: f.domain, classes: f.classes, units: f.units };
         pk.value = w[f.name];
         pk.names = w.names;
         pk.signs = w.signs;
