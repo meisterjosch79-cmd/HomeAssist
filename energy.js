@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.13.1";
+const OB_VERSION = "0.13.2";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -299,11 +299,17 @@ class OmniBatteryDashboard extends HTMLElement {
     const max = Math.max(1e-9, ...rows.map((r) => Math.abs(r.v || 0)));
     const sorted = [...rows].sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity));
     const home = (this._config.widgets || []).filter((x) => x.type === "flow" && this._ids(x.home).length).map((x) => this._sumW(x.home, x)).find((v) => v !== null);
+    // Beitrag jedes Quell-Sensors zum Zufluss (mit Vorzeichen) – zeigt, welcher Sensor die Summe verfälscht
+    const src = (role, k) => this._use([...m.roles[role].keys()]).map((id) => {
+      const raw = this._watts(id), v = raw === null ? null : raw * m.roles[role].get(id).f * k;
+      const t = v === null ? "–" : (v > 0 ? "+" : "") + this._fmtW(v);
+      return `<div class="brow sub"><span title="${esc(id)}">↳ ${esc(this._label(m.roles[role].get(id).wd, id))}</span><b>${esc(t)}</b></div>`;
+    }).join("");
     return `<div class="bal">
       <div class="bsec">Zufluss</div>
-      ${m.solar !== null ? row("☀️ Solar", m.solar) : ""}
-      ${m.grid !== null ? row(m.grid >= 0 ? "🏭 Netzbezug" : "🏭 Einspeisung (netto)", m.grid) : ""}
-      ${batIn !== null ? row(batIn >= 0 ? "🔋 Batterie entlädt" : "🔋 Batterie lädt (netto)", batIn) : ""}
+      ${m.solar !== null ? row("☀️ Solar", m.solar) + src("solar", 1) : ""}
+      ${m.grid !== null ? row(m.grid >= 0 ? "🏭 Netzbezug" : "🏭 Einspeisung (netto)", m.grid) + src("grid", 1) : ""}
+      ${batIn !== null ? row(batIn >= 0 ? "🔋 Batterie entlädt" : "🔋 Batterie lädt (netto)", batIn) + src("battery", -1) : ""}
       ${row("Summe verfügbar", supply, "tot")}
       ${home !== undefined ? `<div class="sub">Gemessener Hausverbrauch (Energiefluss): ${esc(this._fmtW(home))}</div>` : ""}
       <div class="bsec">Verbraucher (${rows.length})</div>
@@ -467,7 +473,7 @@ class OmniBatteryDashboard extends HTMLElement {
       .hist{width:100%;height:90px}
       .bal{font-size:.92em}.bsec{margin:8px 0 2px;font-size:.8em;text-transform:uppercase;letter-spacing:.04em;color:var(--secondary-text-color)}
       .brow{display:flex;justify-content:space-between;gap:8px;padding:2px 0}.brow span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-      .brow b{white-space:nowrap}.brow.tot{border-top:1px solid var(--divider-color);margin-top:4px;padding-top:4px;font-weight:600}
+      .brow b{white-space:nowrap}.brow.sub{font-size:.8em;color:var(--secondary-text-color);padding-left:10px}.brow.sub b{font-weight:500}.brow.tot{border-top:1px solid var(--divider-color);margin-top:4px;padding-top:4px;font-weight:600}
       .stack{height:8px;border-radius:4px;background:var(--c,#e8833a);margin:10px 0;overflow:hidden;background:#e8833a55}
       .stack i{display:block;height:100%;background:var(--primary-color)}
       .rest{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--card-background-color);border-radius:10px;padding:10px 12px;border-left:4px solid var(--c)}
