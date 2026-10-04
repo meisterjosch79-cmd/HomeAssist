@@ -78,6 +78,14 @@ Im Karten-Editor gibt es ganz unten die Sektion **„🧮 Helfer anlegen“**. E
   die fertige Template-Vorlage zum Einfügen unter *Einstellungen → Geräte & Dienste → Helfer → Template → Sensor*.
 - Leistungs- und Energiesensoren lassen sich in einem Helfer nicht mischen.
 
+## Top-Verbraucher
+Das Widget **Top-Verbraucher** durchsucht alle Sensoren im System (nicht nur die in den Widgets eingetragenen) und zeigt die größten Verbraucher.
+- **Aktuell:** alle Leistungssensoren (W/kW) mit dem höchsten Wert im Moment.
+- **Tag/Woche/Monat/Jahr:** Energiezähler (kWh) aus den Langzeitstatistiken; Leistungssensoren nur, wenn das Gerät keinen Energiezähler hat.
+- Die Quellen (Solar/Netz/Batterie aus den Energiefluss-/Batterie-Widgets) werden ausgeblendet, damit sie die Liste nicht anführen. Über die Option *Quellen ebenfalls anzeigen* einblendbar.
+- Mit **Ignorieren** blendest du weitere Gesamtwerte aus (z. B. „Gesamtverbrauch“ oder Summenzähler).
+- Anzahl der Einträge einstellbar (Standard 10).
+
 ## Widgets
 | Typ | Zweck |
 |---|---|
@@ -86,6 +94,7 @@ Im Karten-Editor gibt es ganz unten die Sektion **„🧮 Helfer anlegen“**. E
 | `value` | Beliebiger Einzelwert |
 | `devices` | Verbrauchsliste mehrerer Geräte mit Balken |
 | `balance` | Energiebilanz (automatisch): Quellen aus den Energiefluss-/Batterie-Widgets, Verbraucher aus den Geräteverbrauch-Widgets, Rest = „Energiemenge nicht zugeordnet“ |
+| `top` | Top-Verbraucher (Standard 10) aus **allen** Sensoren des Systems, nicht nur den eingetragenen |
 | `history` | Verlaufsdiagramm einer Entität |
 
 Siehe `example-dashboard.yaml`.

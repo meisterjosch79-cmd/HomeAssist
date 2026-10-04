@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.15.1";
+const OB_VERSION = "0.16.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -11,6 +11,7 @@ const WIDGET_TYPES = {
   value: { label: "Einzelwert", icon: "🔢" , short: "Wert" },
   devices: { label: "Geräteverbrauch (Liste)", icon: "🔌" , short: "Geräte" },
   balance: { label: "Energiebilanz (nicht zugeordnet)", icon: "⚖️", short: "Energiebilanz" },
+  top: { label: "Top-Verbraucher (alle Sensoren im System)", icon: "🏆", short: "Top-Verbraucher" },
   history: { label: "Verlauf (Diagramm)", icon: "📈" , short: "Verlauf" },
 };
 
@@ -22,6 +23,7 @@ const LABELS = {
   battery: "Batterie (+ = Laden; Entlade-Sensor mit „abziehen“ markieren)",
   home: "Hausverbrauch (mehrere Sensoren werden addiert; leer = berechnen)",
   invert_grid: "Netz-Vorzeichen umkehren (wenn Einspeisung als Bezug angezeigt wird)", invert_battery: "Batterie-Vorzeichen umkehren",
+  count: "Anzahl der Einträge (Standard 10)", include_sources: "Quellen (Solar/Netz/Batterie aus den Energiefluss-/Batterie-Widgets) ebenfalls anzeigen",
   deduct: "Von „nicht zugeordnet“ abziehen (andere Bereiche, z. B. anderes Haus, Wallbox)", entity: "Entität", exclude: "Ignorieren (diese Sensoren nicht mitzählen, optional)", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte / Entitäten",
   max: "Maximalwert für Balken (leer = automatisch)", hours: "Zeitraum (Stunden)",
 };
@@ -51,6 +53,7 @@ const SCHEMAS = {
   devices: [NAME, { name: "entities", selector: { entity: { multiple: true } }, _f: "entities" },
     { name: "max", selector: { number: { min: 0, mode: "box" } } }, WIDTH],
   balance: [NAME, MULTI("entities"), MULTI("exclude"), WIDTH],
+  top: [NAME, { name: "count", selector: { number: { min: 1, max: 50, mode: "box" } } }, MULTI("exclude"), BOOL("include_sources"), WIDTH],
   history: [NAME, ENT("entity"), { name: "hours", selector: { number: { min: 1, max: 168, mode: "box" } } }, WIDTH],
 };
 
@@ -89,8 +92,11 @@ class OmniBatteryDashboard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     const ids = this._entityIds();
-    const sig = this._period !== "now" ? "p" + this._period
-      : ids.map((id) => { const s = hass.states[id]; return s ? s.state + s.attributes.unit_of_measurement : "-"; }).join("|");
+    const tops = (this._config?.widgets || []).filter((w) => w.type === "top");
+    const sig = this._period !== "now" ? "p" + this._period + "|" + (this._topTs || 0)
+      : ids.map((id) => { const s = hass.states[id]; return s ? s.state + s.attributes.unit_of_measurement : "-"; }).join("|")
+        + tops.map((w) => "T" + this._topRows(w).map((r) => r.id + Math.round(r.v)).join(",")).join("");
+    if (tops.length && this._period !== "now") this._ensureStatIds();
     if (sig !== this._sig) { this._sig = sig; this._render(); }
     this._loadHistory();
     this._loadStats();
@@ -338,6 +344,62 @@ class OmniBatteryDashboard extends HTMLElement {
         <div class="nv">${esc(this._fmtW(rest))}</div></div></div>`;
   }
 
+  /** Leistung in Watt, nur echte Leistungssensoren (W/kW/MW) */
+  _pw(id) {
+    const st = this._hass?.states?.[id], u = st?.attributes?.unit_of_measurement, v = parseFloat(st?.state);
+    if (isNaN(v) || !["W", "kW", "MW"].includes(u)) return null;
+    return u === "kW" ? v * 1000 : u === "MW" ? v * 1e6 : v;
+  }
+  /** Statistik-Kandidaten für Top-Verbraucher: Energiezähler, Leistungssensoren nur von Geräten ohne Energiezähler */
+  _topCandidates() {
+    const list = this._statIdList || [], dev = (id) => this._hass?.entities?.[id]?.device_id;
+    const en = [], pw = [];
+    for (const x of list) {
+      if (!x.statistic_id.startsWith("sensor.")) continue;
+      if (["Wh", "kWh", "MWh"].includes(x.unit_of_measurement)) en.push(x.statistic_id);
+      else if (["W", "kW", "MW"].includes(x.unit_of_measurement)) pw.push(x.statistic_id);
+    }
+    const devEn = new Set(en.map(dev).filter(Boolean));
+    return [...en, ...pw.filter((id) => !dev(id) || !devEn.has(dev(id)))];
+  }
+  async _ensureStatIds() {
+    if (this._statIdList || this._statIdBusy || !this._hass) return;
+    this._statIdBusy = true;
+    try {
+      this._statIdList = (await this._hass.callWS({ type: "recorder/list_statistic_ids" })) || [];
+      this._topTs = Date.now();
+      if (this._statBusy) this._again = true; else this._loadStats(true);
+    } catch (e) { this._statIdList = []; this._ust = "Statistik-Liste nicht verfügbar: " + (e?.message || ""); }
+    this._statIdBusy = false;
+  }
+  /** Sortierte Verbraucher aller Sensoren des Systems (W in „Aktuell“, kWh in den Zeiträumen) */
+  _topRows(w) {
+    const now = this._period === "now", ex = new Set([...this._ids(w.exclude), VIRT]);
+    if (!w.include_sources) {
+      for (const x of this._config?.widgets || []) {
+        if (x.type === "flow") ["solar", "grid", "grid_export", "battery"].forEach((k) => this._ids(x[k]).forEach((i) => ex.add(i)));
+        if (x.type === "battery") this._ids(x.power).forEach((i) => ex.add(i));
+      }
+    }
+    let rows;
+    if (now) {
+      rows = Object.keys(this._hass?.states || {}).filter((id) => id.startsWith("sensor.") && !ex.has(id))
+        .map((id) => ({ id, v: this._pw(id) })).filter((r) => r.v !== null && r.v >= 1);
+    } else {
+      const st = this._stat?.[this._period] || {};
+      rows = this._topCandidates().filter((id) => !ex.has(id)).map((id) => ({ id, v: st[id] ?? null })).filter((r) => r.v !== null && r.v >= 0.01);
+    }
+    return rows.sort((a, b) => b.v - a.v).slice(0, w.count || 10);
+  }
+  _top(w) {
+    const rows = this._topRows(w), max = Math.max(1e-9, ...rows.map((r) => r.v));
+    if (this._period !== "now" && !this._statIdList) return `<div class="sub">Lade Statistik …</div>`;
+    return `<div class="devs">${rows.map((r, i) => `
+      <div class="dev"><div class="dl"><span title="${esc(r.id)}">${i + 1}. ${esc(this._label(w, r.id))}</span><b>${esc(this._fmtW(r.v))}</b></div>
+      <div class="bar"><i style="width:${Math.min(100, r.v / max * 100)}%"></i></div></div>`).join("") || '<div class="sub">Keine Verbraucher gefunden.</div>'}</div>
+      ${rows.length ? `<div class="sub" style="margin-top:6px">Summe Top ${rows.length}: ${esc(this._fmtW(rows.reduce((a, r) => a + r.v, 0)))}${w.include_sources ? "" : " · Quellen ausgeblendet"}</div>` : ""}`;
+  }
+
   _history(w) {
     const d = this._hist[w.entity + "|" + (w.hours || 24)];
     if (!d || d.length < 2) return `<div class="sub">Lade Verlauf …</div>`;
@@ -381,6 +443,7 @@ class OmniBatteryDashboard extends HTMLElement {
     this._period = p;
     try { localStorage.setItem("ob_period", p); } catch (e) { /* ignore */ }
     this._sig = "";
+    if (p !== "now" && (this._config?.widgets || []).some((w) => w.type === "top")) this._ensureStatIds();
     this._loadStats(true);
     this._render();
   }
@@ -396,6 +459,7 @@ class OmniBatteryDashboard extends HTMLElement {
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities"]) this._use(w[k]).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.deduct).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.entities).forEach((i) => ids.add(i));
+    if ((this._config.widgets || []).some((w) => w.type === "top")) this._topCandidates().forEach((i) => ids.add(i));
     for (const id of [...ids]) {  // Helfer durch ihre Komponenten ersetzen
       const hp = this._helper(id);
       if (hp) { ids.delete(id); this._use(hp.entities || []).forEach((i) => ids.add(i)); }
@@ -408,7 +472,7 @@ class OmniBatteryDashboard extends HTMLElement {
       const now = Date.now();
       const res = await this._hass.callWS({
         type: "recorder/statistics_during_period", start_time: this._periodStart().toISOString(), end_time: new Date(now).toISOString(),
-        statistic_ids: [...ids], period: { day: "5minute", week: "hour", month: "hour", year: "day" }[p], types: ["mean", "change"],
+        statistic_ids: [...ids], period: { day: "5minute", week: "hour", month: "day", year: "day" }[p], types: ["mean", "change"],
       });
       const out = {}, missing = [];
       for (const id of ids) {
@@ -425,6 +489,7 @@ class OmniBatteryDashboard extends HTMLElement {
       this._stat[p] = out; this._statTs[p] = now; this._statMissing = missing;
     } catch (e) { this._statMissing = []; this._ust = "Statistik-Fehler: " + (e?.message || JSON.stringify(e)); }
     this._statBusy = false; this._loading = false; this._render();
+    if (this._again) { this._again = false; this._loadStats(true); }
   }
 
   /** Lässt Home Assistant die neueste Version aus GitHub laden (shell_command) und lädt die Seite neu. */
