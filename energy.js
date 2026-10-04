@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.13.2";
+const OB_VERSION = "0.14.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -22,7 +22,7 @@ const LABELS = {
   battery: "Batterie (+ = Laden; Entlade-Sensor mit „abziehen“ markieren)",
   home: "Hausverbrauch (mehrere Sensoren werden addiert; leer = berechnen)",
   invert_grid: "Netz-Vorzeichen umkehren (wenn Einspeisung als Bezug angezeigt wird)", invert_battery: "Batterie-Vorzeichen umkehren",
-  entity: "Entität", exclude: "Ignorieren (diese Sensoren nicht mitzählen, optional)", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte / Entitäten",
+  deduct: "Von „nicht zugeordnet“ abziehen (andere Bereiche, z. B. anderes Haus, Wallbox)", entity: "Entität", exclude: "Ignorieren (diese Sensoren nicht mitzählen, optional)", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte / Entitäten",
   max: "Maximalwert für Balken (leer = automatisch)", hours: "Zeitraum (Stunden)",
 };
 
@@ -36,7 +36,7 @@ const U_POWER = ["W", "kW", "MW", "Wh", "kWh", "MWh"];
 const PW = ["sensor", ["power", "energy"], U_POWER];
 const FILTERS = {
   soc: ["sensor", ["battery"], ["%"]], power: PW, solar: PW, grid: PW, grid_export: PW, battery: PW, home: PW, entities: PW,
-  entity: [null, null, null], exclude: [null, null, null],
+  entity: [null, null, null], exclude: [null, null, null], deduct: PW,
 };
 const ENT = (n) => ({ name: n, selector: { entity: {} }, _f: n });
 const MULTI = (n) => ({ name: n, selector: { entity: { multiple: true } }, _f: n });
@@ -45,7 +45,7 @@ const BOOL = (n) => ({ name: n, selector: { boolean: {} } });
 const SCHEMAS = {
   battery: [NAME, ENT("soc"), MULTI("power"), BOOL("invert_power"),
     { name: "capacity_kwh", selector: { number: { min: 0, step: 0.1, mode: "box" } } }, WIDTH],
-  flow: [NAME, MULTI("solar"), MULTI("grid"), MULTI("grid_export"), MULTI("battery"), MULTI("home"), BOOL("invert_grid"), BOOL("invert_battery"), WIDTH],
+  flow: [NAME, MULTI("solar"), MULTI("grid"), MULTI("grid_export"), MULTI("battery"), MULTI("home"), MULTI("deduct"), BOOL("invert_grid"), BOOL("invert_battery"), WIDTH],
   value: [NAME, ENT("entity"), { name: "icon", selector: { icon: {} } },
     { name: "decimals", selector: { number: { min: 0, max: 4, mode: "box" } } }, WIDTH],
   devices: [NAME, { name: "entities", selector: { entity: { multiple: true } }, _f: "entities" },
@@ -100,7 +100,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const ids = [];
     for (const w of this._config?.widgets || []) {
       for (const k of ["soc", "entity"]) if (w[k]) ids.push(w[k]);
-      for (const k of ["power", "solar", "grid", "grid_export", "battery", "home"]) ids.push(...this._ids(w[k]));
+      for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "deduct"]) ids.push(...this._ids(w[k]));
       if (Array.isArray(w.entities)) ids.push(...w.entities);
     }
     return ids;
@@ -256,6 +256,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const cons = new Map();
     const addC = (wd, id) => { if (!skip.has(id) && !cons.has(id)) cons.set(id, { f: sgn(wd, id), wd }); };
     for (const wd of ws.filter((x) => x.type === "devices")) this._ids(wd.entities).forEach((id) => addC(wd, id));
+    for (const wd of ws.filter((x) => x.type === "flow")) this._ids(wd.deduct).forEach((id) => addC(wd, id));
     this._ids(w.entities).forEach((id) => addC(w, id));
     const sum = (m) => {
       let t = null;
@@ -379,6 +380,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const ids = new Set();
     for (const w of this._config.widgets || [])
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities"]) this._use(w[k]).forEach((i) => ids.add(i));
+    for (const w of this._config.widgets || []) this._ids(w.deduct).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.entities).forEach((i) => ids.add(i));
     ids.delete(VIRT);
     if (!ids.size) return;

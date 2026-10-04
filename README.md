@@ -61,6 +61,11 @@ Im Auswahldialog der Felder **Geräte** (Geräteverbrauch-Widget) und **Hausverb
 und lässt sich wie ein normaler Sensor in Listen anzeigen und zur Hausverbrauch-Summe addieren. Er funktioniert in allen Zeiträumen (W bzw. kWh).
 Er zählt selbst nicht als Verbraucher der Bilanz, damit keine Rückkopplung entsteht.
 
+### Andere Bereiche von „nicht zugeordnet“ abziehen
+Im Energiefluss-Widget gibt es das Feld **„Von ‚nicht zugeordnet‘ abziehen“**. Dort eingetragene Sensoren (z. B. ein zweites Haus, Wallbox, Werkstatt)
+zählen als Verbraucher der Energiebilanz. Sie verkleinern die nicht zugeordnete Energiemenge und den virtuellen Sensor, ohne in der Haus-Kachel selbst zu erscheinen.
+Im Bilanz-Widget werden sie unter „Verbraucher“ aufgeführt.
+
 ## Widgets
 | Typ | Zweck |
 |---|---|
