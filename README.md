@@ -101,6 +101,11 @@ Manche Integrationen aktualisieren ihre Sensoren nur in festen Abständen (Marst
 Das passiert nur, **solange das Dashboard im Browser offen und sichtbar ist** (mindestens 5 Sekunden Abstand), also ohne dauerhafte Automatisierung.
 Beginne mit 15–30 Sekunden, sehr kurze Abstände können die Batterie belasten.
 
+## Unplausible Statistikwerte
+Defekte Zähler (z. B. Marstek mit 4.294.967.296 = 32-Bit-Überlauf) schreiben riesige Sprünge in die Langzeitstatistik von Home Assistant. In den Zeiträumen Tag bis Jahr ignoriert die Karte
+Zählerschritte und Mittelwerte, die eine **Plausibilitätsgrenze** überschreiten (Standard 100 kW, im Editor einstellbar), und weist oben auf die betroffenen Sensoren hin.
+Die Daten in Home Assistant selbst bleiben unverändert; dauerhaft korrigieren lassen sie sich unter *Entwicklerwerkzeuge → Statistiken*.
+
 ## Widgets
 | Typ | Zweck |
 |---|---|

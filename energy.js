@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.21.0";
+const OB_VERSION = "0.21.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -640,19 +640,24 @@ class OmniBatteryDashboard extends HTMLElement {
       const bad = parts.find((x) => x.status === "rejected");
       this._statErr = bad ? "Statistik-Fehler: " + (bad.reason?.message || JSON.stringify(bad.reason)) : "";
       if (bad && parts.every((x) => x.status === "rejected")) throw bad.reason;
-      const out = {}, missing = [];
+      const out = {}, missing = [], glitch = [], maxKw = Number(this._config.max_kw) || 100;
       for (const id of ids) {
         const rows = res?.[id] || [], unit = this._st(id)?.attributes?.unit_of_measurement;
         if (!rows.length) { out[id] = null; if (essential.has(id)) missing.push(id); continue; }
+        // Plausibilitätsgrenze: Sprünge in Zählern (z. B. 4.294.967.296 = 32-Bit-Überlauf) oder Mittelwerte über maxKw gelten als Messfehler und werden ignoriert
+        let tot = 0, bad = 0;
+        const hrs = (r) => Math.max(1 / 3600, (Math.min(T(r.end), now) - T(r.start)) / 3.6e6);
         if (this._isEnergy(id)) {
           const f = unit === "Wh" ? 0.001 : unit === "MWh" ? 1000 : 1;
-          out[id] = rows.reduce((a, r) => a + (r.change || 0), 0) * f;
+          for (const r of rows) { const d = (r.change || 0) * f; if (d < 0 || d > maxKw * hrs(r)) { bad++; continue; } tot += d; }
         } else {
           const f = unit === "kW" ? 1 : unit === "MW" ? 1000 : 0.001;
-          out[id] = rows.reduce((a, r) => a + (r.mean == null ? 0 : r.mean * (Math.min(T(r.end), now) - T(r.start)) / 3.6e6 * f), 0);
+          for (const r of rows) { if (r.mean == null) continue; const kw = r.mean * f; if (Math.abs(kw) > maxKw) { bad++; continue; } tot += kw * hrs(r); }
         }
+        out[id] = tot;
+        if (bad) glitch.push(id);
       }
-      this._stat[p] = out; this._statTs[p] = now; this._statMissing = missing;
+      this._stat[p] = out; this._statTs[p] = now; this._statMissing = missing; this._statGlitch = glitch;
     } catch (e) { this._statMissing = []; this._statErr = "Statistik-Fehler: " + (e?.message || JSON.stringify(e)); this._ust = this._statErr; }
     this._statBusy = false; this._loading = false; this._render();
     if (this._again) { this._again = false; this._loadStats(true); }
@@ -693,6 +698,7 @@ class OmniBatteryDashboard extends HTMLElement {
     }).join("");
     const seg = this._config.show_periods === false ? "" : `<div class="seg">${Object.entries(PERIODS).map(([k, v]) =>
       `<button data-p="${k}" class="${k === this._period ? "on" : ""}">${v}</button>`).join("")}</div>
+      ${this._period !== "now" && this._statGlitch?.length ? `<div class="sub warn">Unplausible Statistikwerte (über ${Number(this._config.max_kw) || 100} kW) ignoriert bei: ${esc(this._statGlitch.slice(0, 4).map((i) => this._label({}, i)).join(", "))}${this._statGlitch.length > 4 ? ` … (+${this._statGlitch.length - 4})` : ""}</div>` : ""}
       ${this._period !== "now" && this._statMissing?.length ? `<div class="sub warn">Keine Langzeitstatistik für: ${esc(this._statMissing.map((i) => this._label({}, i)).join(", "))} (Sensor braucht eine state_class)</div>` : ""}`;
     this.shadowRoot.innerHTML = `<style>
       :host{display:block}
@@ -1073,6 +1079,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       <label><input type="checkbox" id="flt" ${this._filterOn === false ? "" : "checked"}> Sensorliste vorfiltern (Leistung / Batterie)</label>
       <label><input type="checkbox" id="sp" ${this._config.show_periods === false ? "" : "checked"}> Zeitraum-Umschalter (Aktuell / Tag / Woche / Monat / Jahr) anzeigen</label><br>
       <div class="row" style="margin:6px 0"><span>Live-Abfrage alle</span> <input class="t" id="ps" type="number" min="0" step="5" style="width:90px" value="${esc(this._config.poll_s || "")}" placeholder="0 = aus"> <span>Sekunden, nur solange das Dashboard offen ist</span></div>
+      <div class="row" style="margin:6px 0"><span>Plausibilitätsgrenze für Zeiträume</span> <input class="t" id="mk" type="number" min="1" step="1" style="width:90px" value="${esc(this._config.max_kw || "")}" placeholder="100"> <span>kW – größere Sprünge in Zählern gelten als Messfehler</span></div>
       <div class="row" style="margin:0 0 6px"><span>Dienst dafür</span> <input class="t" id="psv" style="width:100%;max-width:340px" value="${esc(this._config.poll_service || "")}" placeholder="marstek_local_api.request_data_sync"></div>
       <label><input type="checkbox" id="su" ${this._config.show_update === false ? "" : "checked"}> Update-Button in der Karte anzeigen</label>
       <div id="list"></div>
@@ -1088,6 +1095,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     });
     const setNum = (k, v) => { if (v === "" || !(Number(v) > 0)) delete this._config[k]; else this._config[k] = Number(v); this._emit(); };
     this.querySelector("#ps").addEventListener("input", (e) => setNum("poll_s", e.target.value));
+    this.querySelector("#mk").addEventListener("input", (e) => setNum("max_kw", e.target.value));
     this.querySelector("#psv").addEventListener("input", (e) => { if (e.target.value.trim()) this._config.poll_service = e.target.value.trim(); else delete this._config.poll_service; this._emit(); });
     this.querySelector("#su").addEventListener("change", (e) => {
       if (e.target.checked) delete this._config.show_update; else this._config.show_update = false;
