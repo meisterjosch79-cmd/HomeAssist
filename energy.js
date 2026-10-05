@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.27.0";
+const OB_VERSION = "0.27.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -411,7 +411,7 @@ class OmniBatteryDashboard extends HTMLElement {
       ${m.grid !== null ? row(m.grid >= 0 ? "🏭 Netzbezug" : "🏭 Einspeisung (netto)", m.grid) + src("grid", 1) : ""}
       ${batIn !== null ? row(batIn >= 0 ? "🔋 Batterie entlädt" : "🔋 Batterie lädt (netto)", batIn) + src("battery", -1) : ""}
       ${row("= Hausverbrauch gesamt (berechnet)", supply, "tot")}
-      ${hasRef ? `<div class="bsec">Referenz-Zähler (gemessen hinter den Quellen)</div>${row("Gemessen am Referenz-Zähler", refSum)}${row("Differenz Quellen − Zähler: Verluste, Standby, Messabweichung", loss)}` : ""}
+      ${hasRef ? `<div class="bsec">Referenz-Zähler (gemessen hinter den Quellen)</div>${this._use(this._ids(this._config.balance_ref)).map((id) => { const v = this._watts(id); return `<div class="brow sub"><span title="${esc(id)}">↳ ${esc(this._label({ names: this._config.balance_ref_names }, id))}</span><b>${esc(this._fmtW(v))}</b></div>`; }).join("")}${row("Gemessen am Referenz-Zähler", refSum)}${row("Differenz Quellen − Zähler: Verluste, Standby, Messabweichung", loss)}` : ""}
       ${home !== undefined && !hasRef ? `<div class="sub">Gemessener Hausverbrauch (Energiefluss): ${esc(this._fmtW(home))}</div>` : ""}
       ${areaRows.length ? `<div class="bsec">2 · Abzüglich anderer Bereiche (${areaRows.length})</div>${list(areaRows, houseTotal)}${row("= Verbrauch dieses Hauses", houseUse, "tot")}` : ""}
       <div class="bsec">${areaRows.length ? "3" : "2"} · Davon erklärt durch Geräte (${devRows.length})</div>
@@ -1192,8 +1192,15 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       <div class="sub" style="margin:6px 0">Spalte 2 = aktueller Messwert, Spalte 3 = <b>Beitrag zu „nicht zugeordnet“</b> (+ erhöht, − verringert). Helfer zeigen ihren berechneten Wert. „Nicht zugeordnet“ = Zufluss (Solar + Netz + Batterie-Entladung) − alle Verbraucher. Die Sensoren werden automatisch aus den Widgets übernommen. Hier legst du je Sensor fest, ob er <b>addiert</b>, <b>subtrahiert</b> oder <b>ignoriert</b> wird. Die Standardeinstellung steht jeweils dabei; sortiert nach der größten Leistung.</div>`;
     const sum = document.createElement("div"); sum.className = "usum"; this._unsum = sum; sec.appendChild(sum);
     const rp = document.createElement("ob-entity-picker");
-    rp.options = { label: "Referenz-Zähler — gemessener Gesamtverbrauch hinter Solar/Speicher (z. B. Hausstrom-Zähler L1–L3). Leer = Verbrauch aus den Quellen berechnen", multiple: true, noNames: true, domain: "sensor", classes: ["power", "energy"], units: U_POWER, getHelpers: () => this._helperList() };
-    rp.value = this._config.balance_ref; rp.hass = this._hass;
+    rp.options = { label: "Referenz-Zähler — gemessener Gesamtverbrauch hinter Solar/Speicher (z. B. Hausstrom- und Heizstrom-Zähler; ein Zähler mit geöffnetem Relais liefert 0 W, die Werte werden addiert). Leer = Verbrauch aus den Quellen berechnen", multiple: true, domain: "sensor", classes: ["power", "energy"], units: U_POWER, getHelpers: () => this._helperList() };
+    rp.value = this._config.balance_ref; rp.names = this._config.balance_ref_names; rp.hass = this._hass;
+    rp.addEventListener("renamed", (ev) => {
+      ev.stopPropagation();
+      const n = { ...(this._config.balance_ref_names || {}) };
+      if (ev.detail.name) n[ev.detail.id] = ev.detail.name; else delete n[ev.detail.id];
+      if (Object.keys(n).length) this._config.balance_ref_names = n; else delete this._config.balance_ref_names;
+      this._emit();
+    });
     rp.addEventListener("picked", (ev) => {
       ev.stopPropagation();
       if (ev.detail.value.length) this._config.balance_ref = ev.detail.value; else delete this._config.balance_ref;

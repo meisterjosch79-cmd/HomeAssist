@@ -79,6 +79,7 @@ oder ein Helfer, der bekannte Teilbereiche zusammenfasst.
 Hängt Solar und Speicher **vor** dem Hausstrom-Zähler (dieser misst nur den Verbrauch dahinter), trägst du im Editor in der Sektion „Nicht zugeordnet — Zusammensetzung“ unter
 **Referenz-Zähler** den gemessenen Gesamtverbrauch ein (z. B. Hausstrom L1–L3). Dann gilt:
 
+- Du kannst **mehrere Referenz-Zähler** eintragen (z. B. Hausstrom- und Heizstrom-Zähler). Ihre Werte werden addiert; ein Zähler mit geöffnetem Relais liefert 0 W. So stimmt die Rechnung unabhängig davon, an welchem Zähler K4 und die Wärmepumpe gerade hängen. Die Zähler lassen sich benennen und werden im Widget Energiebilanz einzeln aufgeführt.
 - **Verbrauch gesamt = Referenz-Zähler** (statt aus Solar/Netz/Batterie berechnet).
 - **Nicht zugeordnet** = Referenz − andere Bereiche (z. B. K4) − Geräte.
 - Neuer virtueller Sensor **„Anlagenverluste & Messabweichung“** = berechneter Verbrauch aus den Quellen − Referenz-Zähler (Wechselrichter-/Batterieverluste, Standby, Messabweichungen). Er ist wie „nicht zugeordnet“ in den Listen wählbar.
