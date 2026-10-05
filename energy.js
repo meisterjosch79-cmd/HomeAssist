@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.27.1";
+const OB_VERSION = "0.28.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -13,17 +13,113 @@ const WIDGET_TYPES = {
   balance: { label: "Energiebilanz (nicht zugeordnet)", icon: "⚖️", short: "Energiebilanz" },
   top: { label: "Top-Verbraucher (alle Sensoren im System)", icon: "🏆", short: "Top-Verbraucher" },
   history: { label: "Verlauf (Diagramm)", icon: "📈" , short: "Verlauf" },
+  claude: { label: "Szenario by Claude (fertige Ansicht)", icon: "✨", short: "Szenario" },
+  claudeinfo: { label: "", icon: "✨", short: "Szenario by Claude", hidden: true },
 };
 
+
+// ---------- Szenarien by Claude: fertige, auf dieses Haus zugeschnittene Ansichten. Neue/angepasste Szenarien kommen per Update. ----------
+const CLAUDE_SCENARIOS = (() => {
+  const S = "sensor.sonnenbatterie_145854_state_", M1 = "sensor.technik_marstek_venuse_3_0_5b00_venus01_", M2 = "sensor.technik_marstek_venuse_3_0_5f7e_venus02_";
+  const I = {
+    prod: S + "production", gin: S + "grid_in", gout: S + "grid_out", bin: S + "battery_in", bout: S + "battery_out", soc: S + "battery_percentage_user",
+    m1in: M1 + "power_in", m1out: M1 + "power_out", m2in: M2 + "power_in", m2out: M2 + "power_out", msoc: "sensor.marstek_system_average_state_of_charge",
+    hs: ["l1", "l2", "l3"].map((l) => "sensor.hausstrom_leistung_" + l), hz: ["l1", "l2", "l3"].map((l) => "sensor.warmepumpen_zahler_leistung_" + l), k4: ["l1", "l2", "l3"].map((l) => "sensor.breaker_3_leistung_" + l),
+    buro: "sensor.antela_smart_power_strip_2a_1c_2_leistung", heiz: "sensor.heizstab_warmwasser_leistung", klima: "sensor.klimaanlage_leistung", tv: "sensor.fernseher_leistung", wp: "sensor.luxtronik_320919_035_current_power_consumption",
+    pvE: "sensor.pv_produktionshelfer", impE: "sensor.netzbezug_sonnen_2", expE: "sensor.einspeisung_sonnen", hsE: "sensor.hausstrom_energie_gesamt", hzE: "sensor.warmepumpen_zahler_energie_gesamt", k4E: "sensor.breaker_3_energie_gesamt",
+    buroE: "sensor.antela_smart_power_strip_2a_1c_2_energie_gesamt", heizE: "sensor.heizstab_warmwasser_energie_gesamt", klimaE: "sensor.klimaanlage_energie_gesamt", tvE: "sensor.fernseher_energie_gesamt",
+    wpE1: "sensor.luxtronik_320919_035_heat_energy_input", wpE2: "sensor.luxtronik_320919_035_dhw_energy_input",
+  };
+  const H = (id, name, entities, signs) => ({ id, name, entities, ...(signs ? { signs } : {}) });
+  const hp = (id) => HELP_PREFIX + id;
+  const helpers = [
+    H("cl_hausstrom", "Hausstrom Zähler (L1–L3)", I.hs), H("cl_heizstrom", "Heizstromzähler (L1–L3)", I.hz), H("cl_k4", "Kapellenweg 4 (K4, L1–L3)", I.k4),
+    H("cl_netz", "Netz (Bezug +, Einspeisung −)", [I.gin, I.gout], { [I.gout]: -1 }),
+    H("cl_bat", "Batterien gesamt (Laden +, Entladen −)", [I.bin, I.m1in, I.m2in, I.bout, I.m1out, I.m2out], { [I.bout]: -1, [I.m1out]: -1, [I.m2out]: -1 }),
+  ];
+  const batIds = [I.bin, I.bout, I.m1in, I.m1out, I.m2in, I.m2out], batSigns = { [I.bout]: -1, [I.m1out]: -1, [I.m2out]: -1 };
+  const names = {
+    [I.prod]: "PV-Produktion (Sonnen)", [I.gin]: "Netzbezug (Sonnen)", [I.gout]: "Einspeisung (Sonnen)", [I.bin]: "Sonnen lädt", [I.bout]: "Sonnen entlädt",
+    [I.m1in]: "Marstek 1 lädt", [I.m1out]: "Marstek 1 entlädt", [I.m2in]: "Marstek 2 lädt", [I.m2out]: "Marstek 2 entlädt",
+    [I.buro]: "Büro Steckdosenleiste", [I.heiz]: "Heizstab Warmwasser", [I.klima]: "Klimaanlage", [I.tv]: "Fernseher", [I.wp]: "Wärmepumpe",
+    [I.buroE]: "Büro Steckdosenleiste", [I.heizE]: "Heizstab Warmwasser", [I.klimaE]: "Klimaanlage", [I.tvE]: "Fernseher", [I.wpE1]: "Wärmepumpe Heizen", [I.wpE2]: "Wärmepumpe Warmwasser",
+    [I.pvE]: "PV-Produktion (Zähler)", [I.impE]: "Netzbezug (Zähler)", [I.expE]: "Einspeisung (Zähler)", [I.hsE]: "Hausstrom-Zähler (Energie)", [I.hzE]: "Heizstromzähler (Energie)", [I.k4E]: "K4 (Energie)",
+  };
+  const devices = [I.buro, I.heiz, I.klima, I.tv, I.wp];
+  return {
+    k6_bilanz: {
+      title: "Kapellenweg 6 · Energiefluss & Bilanz",
+      desc: "Quellen (Sonnenbatterie, 2× Marstek) → Hausstrom-/Heizstrom-Zähler → K4 und Geräte. Zeigt den Rest als „nicht zugeordnet“ und die Anlagenverluste. Umschalter oben wirkt auf alle Teile.",
+      requires: [I.prod, I.gin, I.gout, ...I.hs, ...I.hz, ...I.k4, ...devices, I.hsE, I.hzE, I.k4E],
+      build: () => ({
+        helpers, balance_ref: [hp("cl_hausstrom"), I.hsE, hp("cl_heizstrom"), I.hzE], balance_ref_names: { [hp("cl_hausstrom")]: "Hausstrom Zähler", [I.hsE]: "Hausstrom Zähler", [hp("cl_heizstrom")]: "Heizstromzähler", [I.hzE]: "Heizstromzähler" },
+        widgets: [
+          { type: "flow", name: "Kapellenweg 6", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin, I.impE], grid_export: [I.gout, I.expE], battery: batIds, signs: batSigns,
+            home: [I.buro, I.buroE, I.heiz, I.heizE, I.klima, I.klimaE, I.tv, I.tvE, I.wp, I.wpE1, I.wpE2, VIRT], deduct: [hp("cl_k4"), I.k4E] },
+          { type: "battery", name: "Speicher (Sonnen)", width: 1, soc: I.soc, power: [I.bin, I.bout], signs: { [I.bout]: -1 }, names },
+          { type: "balance", name: "Bilanz Kapellenweg 6", width: 2 },
+          { type: "devices", name: "Geräte Kapellenweg 6", width: 1, names, entities: devices },
+          { type: "battery", name: "Speicher (Marstek)", width: 1, soc: I.msoc, power: [I.m1in, I.m1out, I.m2in, I.m2out], signs: { [I.m1out]: -1, [I.m2out]: -1 }, names },
+        ],
+      }),
+    },
+    k6_verlauf: {
+      title: "Kapellenweg 6 · Verlauf (Solar, Netz, Verbrauch, Speicher)",
+      desc: "Ein Diagramm: PV-Produktion, Netz (oberhalb 0 = Bezug, unterhalb = Einspeisung), Speicher (Laden/Entladen) und der gemessene Hausstrom. Zeitraum im Widget einstellbar.",
+      requires: [I.prod, I.gin, I.gout, ...I.hs],
+      build: () => ({
+        helpers,
+        widgets: [{ type: "history", name: "Leistung der letzten 24 Stunden", hours: 24, width: 4, series: [
+          { entity: I.prod, name: "PV-Produktion", color: "#e0a800" },
+          { entity: hp("cl_netz"), name: "Netz (Bezug + / Einspeisung −)", color: "#03a9f4" },
+          { entity: hp("cl_bat"), name: "Speicher (Laden + / Entladen −)", color: "#2e9e5b" },
+          { entity: hp("cl_hausstrom"), name: "Hausstrom Zähler", color: "#9c27b0" },
+          { entity: hp("cl_k4"), name: "K4", color: "#e8833a" },
+        ] }],
+      }),
+    },
+    k6_geraete: {
+      title: "Kapellenweg 6 · Geräte & Top-Verbraucher",
+      desc: "Messbare Geräte nebeneinander und darunter die größten Verbraucher im ganzen System (Prognose-, Gesamt- und Quellen-Sensoren sind ausgeblendet).",
+      requires: devices,
+      build: () => ({
+        helpers,
+        widgets: [
+          { type: "devices", name: "Geräte", width: 2, names, entities: [...devices, hp("cl_k4")] },
+          { type: "top", name: "Top-Verbraucher", width: 2, count: 15, exclude_match: "forecast|geschätzt|marstek system|sonnenbatterie|hausstrom zähler|heizstromzähler|ct phase|ct total|helper|helfer|täglich" },
+        ],
+      }),
+    },
+  };
+})();
+const CLAUDE_OPTIONS = Object.entries(CLAUDE_SCENARIOS).map(([value, sc]) => ({ value, label: sc.title }));
+
+/** Ersetzt „Szenario by Claude“-Widgets durch ihre fertigen Widgets (nur im Speicher, die gespeicherte Konfiguration bleibt unverändert) */
+function expandClaude(cfg) {
+  if (!(cfg.widgets || []).some((w) => w.type === "claude")) return cfg;
+  const ws = [], helpers = [...(cfg.helpers || [])], extra = {};
+  (cfg.widgets || []).forEach((w, ix) => {
+    if (w.type !== "claude") { ws.push({ ...w, _ix: ix }); return; }
+    const sc = CLAUDE_SCENARIOS[w.scenario];
+    if (!sc) { ws.push({ type: "claudeinfo", title: "Szenario by Claude", desc: "Dieses Szenario ist in dieser Version nicht enthalten. Bitte ⟳ Update ausführen oder ein anderes Szenario wählen.", width: 4, _cl: true }); return; }
+    const b = sc.build();
+    ws.push({ type: "claudeinfo", title: w.name || sc.title, desc: sc.desc, requires: sc.requires, width: Math.min(4, Math.max(1, w.width || 4)), _cl: true });
+    b.widgets.forEach((x) => ws.push({ ...x, _cl: true }));
+    (b.helpers || []).forEach((h) => { if (!helpers.some((x) => x.id === h.id)) helpers.push(h); });
+    ["balance_ref", "balance_ref_names", "unassigned_ov"].forEach((k) => { if (b[k] && !cfg[k] && !extra[k]) extra[k] = b[k]; });
+  });
+  return { ...cfg, ...extra, widgets: ws, ...(helpers.length ? { helpers } : {}) };
+}
+
 const LABELS = {
-  type: "Typ", width: "Breite (1-4 Spalten)", name: "Name", soc: "Ladestand (SOC) — Sensor für den Ring (nur einer)",
+  scenario: "Szenario", type: "Typ", width: "Breite (1-4 Spalten)", name: "Name", soc: "Ladestand (SOC) — Sensor für den Ring (nur einer)",
   power: "Leistung — + = Laden; Entlade-Sensor mit „abziehen“ markieren", invert_power: "Vorzeichen umkehren (Standard: + = Laden)",
   capacity_kwh: "Kapazität (kWh, optional)", solar: "Solarproduktion — mehrere Sensoren werden addiert",
   grid: "Netz: Bezug — + = Bezug, − = Einspeisung (oder reiner Bezug-Sensor)", grid_export: "Netz: Einspeisung — optional, nur bei separatem Sensor",
   battery: "Batterie — + = Laden; Entlade-Sensor mit „abziehen“ markieren",
   home: "Hausverbrauch — mehrere Sensoren werden addiert; leer = berechnen",
   invert_grid: "Netz-Vorzeichen umkehren (wenn Einspeisung als Bezug angezeigt wird)", invert_battery: "Batterie-Vorzeichen umkehren",
-  refresh_s: "Aktualisierung alle … Sekunden (Standard 5, nur Ansicht „Aktuell“)", count: "Anzahl der Einträge (Standard 10, bis 1000; lange Listen scrollen)", include_sources: "Quellen (Solar/Netz/Batterie aus den Energiefluss-/Batterie-Widgets) ebenfalls anzeigen",
+  refresh_s: "Aktualisierung alle … Sekunden (Standard 5, nur Ansicht „Aktuell“)", exclude_match: "Ausblenden per Textmuster (Name oder ID, mehrere mit | trennen, z. B. forecast|total)", count: "Anzahl der Einträge (Standard 10, bis 1000; lange Listen scrollen)", include_sources: "Quellen (Solar/Netz/Batterie aus den Energiefluss-/Batterie-Widgets) ebenfalls anzeigen",
   deduct: "Von „nicht zugeordnet“ abziehen — andere Bereiche, z. B. anderes Haus, Wallbox", entity: "Sensor", exclude: "Ignorieren — diese Sensoren nicht mitzählen (optional)", icon: "Icon", decimals: "Nachkommastellen", entities: "Geräte — jeder Sensor ist ein eigener Eintrag",
   max: "Maximalwert für Balken (leer = automatisch)", hours: "Zeitraum (Stunden)",
 };
@@ -53,7 +149,8 @@ const SCHEMAS = {
   devices: [NAME, { name: "entities", selector: { entity: { multiple: true } }, _f: "entities" },
     { name: "max", selector: { number: { min: 0, mode: "box" } } }, WIDTH],
   balance: [NAME, MULTI("entities"), MULTI("exclude"), WIDTH],
-  top: [NAME, { name: "count", selector: { number: { min: 1, max: 1000, mode: "box" } } }, { name: "refresh_s", selector: { number: { min: 1, max: 3600, mode: "box", unit_of_measurement: "s" } } }, MULTI("exclude"), BOOL("include_sources"), WIDTH],
+  top: [NAME, { name: "count", selector: { number: { min: 1, max: 1000, mode: "box" } } }, { name: "refresh_s", selector: { number: { min: 1, max: 3600, mode: "box", unit_of_measurement: "s" } } }, MULTI("exclude"), { name: "exclude_match", selector: { text: {} } }, BOOL("include_sources"), WIDTH],
+  claude: [NAME, { name: "scenario", selector: { select: { mode: "dropdown", options: CLAUDE_OPTIONS } } }, WIDTH],
   history: [NAME, { name: "hours", selector: { number: { min: 1, max: 168, mode: "box" } } }, WIDTH],
 };
 
@@ -122,8 +219,8 @@ class OmniBatteryDashboard extends HTMLElement {
 
   setConfig(config) {
     if (!config) throw new Error("Ungültige Konfiguration");
-    this._config = { title: "Energie", widgets: [], ...config };
     this._rawCanon = canon(config);
+    this._config = expandClaude({ title: "Energie", widgets: [], ...config });
     if (!this._period) {
       let st = null;
       try { st = localStorage.getItem("ob_period"); } catch (e) { /* ignore */ }
@@ -192,13 +289,14 @@ class OmniBatteryDashboard extends HTMLElement {
   _ids(v) { return Array.isArray(v) ? v : v ? [v] : []; }
   _helper(id) { return typeof id === "string" && id.startsWith(HELP_PREFIX) ? (this._config?.helpers || []).find((h) => h.id === id.slice(HELP_PREFIX.length)) : null; }
   _isEnergy(id) {
+    if (this._helper(id)) { const f = this._hflat(id); return f.length > 0 && f.every((x) => this._isEnergy(x.id)); }
     const a = this._st(id)?.attributes || {};
     return ["Wh", "kWh", "MWh"].includes(a.unit_of_measurement) || a.device_class === "energy";
   }
   /** Sensoren eines Feldes, die im aktuellen Zeitraum zählen:
    *  Aktuell = nur Leistungssensoren; Tag/Woche/Monat/Jahr = Energiezähler, sonst Leistung (Statistik-Mittelwert × Zeit). */
   _use(v) {
-    const ids = this._ids(v), en = ids.filter((i) => this._isEnergy(i)), virt = ids.filter((i) => i === VIRT || i === VIRT_LOSS || String(i).startsWith(HELP_PREFIX));
+    const ids = this._ids(v), en = ids.filter((i) => this._isEnergy(i)), virt = ids.filter((i) => i === VIRT || i === VIRT_LOSS);
     if (this._period === "now") return ids.filter((i) => !this._isEnergy(i));
     return en.length ? [...en, ...virt] : ids;
   }
@@ -340,6 +438,14 @@ class OmniBatteryDashboard extends HTMLElement {
     return { solar: sum(roles.solar), grid: sum(roles.grid), bat: sum(roles.battery), roles, cons, hasSrc: seen.size > 0 };
   }
 
+  /** Kopf eines Szenarios by Claude: Titel, Beschreibung, fehlende Sensoren */
+  _claudeinfo(w) {
+    const miss = (w.requires || []).filter((id) => !this._st(id) || ["unavailable", "unknown"].includes(this._st(id).state));
+    return `<div class="sub">${esc(w.desc || "")}</div>
+      ${miss.length ? `<div class="sub warn" style="text-align:left;margin-top:6px">⚠ ${miss.length} benötigte Sensoren liefern gerade nichts: ${esc(miss.slice(0, 4).map((i) => this._label({}, i)).join(", "))}${miss.length > 4 ? " …" : ""}</div>` : `<div class="sub" style="margin-top:6px">✓ Alle benötigten Sensoren sind vorhanden.</div>`}
+      <div class="sub" style="margin-top:6px">Szenario-Stand: v${OB_VERSION} · Änderungswünsche an Claude im Editor unter „Szenario by Claude“.</div>`;
+  }
+
   /** Rechnet die Bilanz aus (Zufluss, Verbraucher, Rest); null ohne Quellen */
   _balanceCalc(w) {
     const m = this._balanceModel(w);
@@ -350,6 +456,12 @@ class OmniBatteryDashboard extends HTMLElement {
       const raw = this._watts(id);
       return { id, wd: c.wd, kind: c.kind, v: raw === null ? null : raw * c.f };
     });
+    // „Andere Bereiche“ (Abzug-Feld): Leistungs- und Energiesensor desselben Bereichs sind Alternativen – je nach Ansicht zählt nur eine Art
+    const byWd = new Map(), keepArea = new Set();
+    for (const [id, c] of m.cons) if (c.kind === "area") { if (!byWd.has(c.wd)) byWd.set(c.wd, []); byWd.get(c.wd).push(id); }
+    for (const ids of byWd.values()) this._use(ids).forEach((i) => keepArea.add(i));
+    rows = rows.filter((r) => r.kind !== "area" || keepArea.has(r.id));
+    if (this._period === "now") rows = rows.filter((r) => !this._isEnergy(r.id));  // Zähler lassen sich in „Aktuell“ nicht einrechnen
     // Zeiträume: hat ein Gerät einen Energiezähler UND einen Leistungssensor in der Liste, zählt nur der Zähler (sonst doppelt gezählt)
     const skipped = [];
     if (this._period !== "now") {
@@ -453,7 +565,7 @@ class OmniBatteryDashboard extends HTMLElement {
       const list = this._ids(t.entities).filter((x) => x !== id); list.push(id); t.entities = list;
       await this._hass.callWS({ type: "lovelace/config/save", url_path, config: cfg });
       this._rawCanon = canon(hit);
-      const lw = this._config.widgets[wi]; lw.entities = [...list];
+      const lw = this._config.widgets.find((x) => (x._ix ?? -1) === wi) || this._config.widgets[wi]; lw.entities = [...list];
       this._ust = `Zugeordnet: ${this._label(lw, id)} → ${lw.name || "Geräte"}`;
     } catch (e) {
       this._ust = "Zuordnen nicht möglich: " + (e?.message || e?.error?.message || e?.code || JSON.stringify(e)) + " (braucht Administratorrechte und ein Dashboard im Storage-Modus)";
@@ -510,18 +622,21 @@ class OmniBatteryDashboard extends HTMLElement {
         if (x.type === "battery") this._ids(x.power).forEach((i) => ex.add(i));
       }
     }
+    let rx = null;
+    try { if (w.exclude_match) rx = new RegExp(w.exclude_match, "i"); } catch (e) { /* ungültiges Muster ignorieren */ }
+    const matchEx = (id) => rx && (rx.test(id) || rx.test(this._st(id)?.attributes?.friendly_name || ""));
     let rows;
     const info = { total: 0, active: 0, excluded: 0, hidden: 0 };
     if (now) {
       const all = Object.keys(this._hass?.states || {}).filter((id) => id.startsWith("sensor.")).map((id) => ({ id, v: this._pw(id) })).filter((r) => r.v !== null);
       info.total = all.length;
       const act = all.filter((r) => r.v >= 1); info.active = act.length;
-      rows = act.filter((r) => !ex.has(r.id)); info.excluded = act.length - rows.length;
+      rows = act.filter((r) => !ex.has(r.id) && !matchEx(r.id)); info.excluded = act.length - rows.length;
     } else {
       const st = this._stat?.[this._period] || {}, cand = this._topCandidates();
       info.total = cand.length;
       const act = cand.map((id) => ({ id, v: st[id] ?? null })).filter((r) => r.v !== null && r.v >= 0.01); info.active = act.length;
-      rows = act.filter((r) => !ex.has(r.id)); info.excluded = act.length - rows.length;
+      rows = act.filter((r) => !ex.has(r.id) && !matchEx(r.id)); info.excluded = act.length - rows.length;
     }
     const hide = this._hideSet();
     info.hidden = rows.filter((r) => hide.has(r.id)).length;
@@ -536,7 +651,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const nHide = this._hideSet().size;
     const devs = (this._config.widgets || []).map((x, i) => ({ x, i })).filter((o) => o.x.type === "devices");
     const assigned = (id) => devs.find((d) => this._ids(d.x.entities).includes(id));
-    const opts = devs.map((d, k) => `<option value="${d.i}">${esc(d.x.name || "Geräte " + (k + 1))}</option>`).join("");
+    const opts = devs.filter((d) => !d.x._cl).map((d, k) => `<option value="${d.x._ix ?? d.i}">${esc(d.x.name || "Geräte " + (k + 1))}</option>`).join("");
     const bar = (r) => `<div class="tb"><div class="bar"><i style="width:${Math.min(100, r.v / max * 100)}%"></i></div>${
       assigned(r.id) ? `<span class="tag">✓ ${esc(assigned(r.id).x.name || "Geräte")}</span>`
         : devs.length ? `<select class="ta" data-id="${esc(r.id)}"><option value="">＋ zu Gerät …</option>${opts}</select>` : ""}</div>`;
@@ -813,7 +928,7 @@ class OmniBatteryDashboard extends HTMLElement {
     if (!this._config) return;
     const body = (this._config.widgets || []).map((w) => {
       const fn = this["_" + w.type];
-      const title = w.name || (w.entity ? this._name(w.entity) : WIDGET_TYPES[w.type]?.short || "");
+      const title = w.name || w.title || (w.entity ? this._name(w.entity) : WIDGET_TYPES[w.type]?.short || "");
       const span = Math.min(4, Math.max(1, w.width || 1));
       return `<section class="w" data-w="${span}" style="grid-column: span ${span}">
         <h3>${esc(title)}</h3>${fn ? fn.call(this, w) : `<div class="sub">Unbekannter Typ: ${esc(w.type)}</div>`}</section>`;
@@ -1120,6 +1235,25 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   _helperList() { return (this._config.helpers || []).map((h) => ({ id: HELP_PREFIX + h.id, name: h.name || "Helfer" })); }
 
   /** Template-Definition für einen echten Home-Assistant-Helfer (Template-Sensor) aus den Komponenten */
+  /** Editor-Teil „Szenario by Claude“: Beschreibung und „Wunsch an Claude“ (kopiert Wunsch + Konfiguration für den Chat) */
+  _claudeEditor(w, i, upd) {
+    const box = document.createElement("div");
+    box.className = "sered";
+    const sc = CLAUDE_SCENARIOS[w.scenario];
+    box.innerHTML = `<div class="sh"><b>✨ Szenario by Claude</b><small>${esc(sc ? sc.desc : "Wähle oben ein Szenario. Weitere und angepasste Szenarien liefere ich per ⟳ Update – sag mir im Chat, was du dir wünschst.")}</small></div>
+      <label>Dein Änderungswunsch an Claude (optional)</label>
+      <textarea class="t cw" rows="4" style="width:100%;box-sizing:border-box" placeholder="z. B. Heizstrom getrennt anzeigen, Wallbox ergänzen, Diagramm auf 7 Tage …">${esc(w.wish || "")}</textarea>
+      <div class="row"><button class="cp">📋 Wunsch + Konfiguration für Claude kopieren</button><span class="sub cs"></span></div>`;
+    box.querySelector(".cw").addEventListener("input", (e) => upd({ wish: e.target.value }));
+    box.querySelector(".cp").addEventListener("click", async () => {
+      const txt = `Wunsch an Claude: ${w.wish || "(keiner)"}\nSzenario: ${w.scenario || "-"} · Kartenversion ${OB_VERSION}\n\nKonfiguration der Karte:\n${JSON.stringify(this._config, null, 1)}`;
+      const out = box.querySelector(".cs");
+      try { await navigator.clipboard.writeText(txt); out.textContent = "Kopiert – im Chat einfügen."; }
+      catch (e) { const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); out.textContent = "Kopiert – im Chat einfügen."; } catch (e2) { out.textContent = "Kopieren nicht möglich."; } ta.remove(); }
+    });
+    return box;
+  }
+
   /** Aktueller Wert eines Sensors als Text (Editor-Anzeige) */
   _valText(id) {
     if (String(id).startsWith("virtual:")) return "Helfer";
@@ -1444,7 +1578,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       <div class="row" style="margin:0 0 6px"><span>Dienst dafür</span> <input class="t" id="psv" style="width:100%;max-width:340px" value="${esc(this._config.poll_service || "")}" placeholder="marstek_local_api.request_data_sync"></div>
       <label><input type="checkbox" id="su" ${this._config.show_update === false ? "" : "checked"}> Update-Button in der Karte anzeigen</label>
       <div id="list"></div>
-      <div class="row"><select id="newtype">${Object.entries(WIDGET_TYPES).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join("")}</select>
+      <div class="row"><select id="newtype">${Object.entries(WIDGET_TYPES).filter(([, v]) => !v.hidden).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join("")}</select>
         <button id="add">+ Widget hinzufügen</button></div>
       <div id="hsec"></div>
       <div id="usec"></div>
@@ -1521,6 +1655,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
         d.appendChild(pk);
       }
       if (w.type === "history") d.appendChild(this._seriesEditor(w, i, upd));
+      if (w.type === "claude") d.appendChild(this._claudeEditor(w, i, upd));
       const row = document.createElement("div");
       row.className = "row";
       row.innerHTML = `<button data-a="up">↑</button><button data-a="down">↓</button><button data-a="del">🗑 Entfernen</button>`;

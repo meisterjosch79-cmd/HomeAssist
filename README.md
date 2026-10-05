@@ -134,6 +134,18 @@ Im Auswahlfenster für Sensoren (Schaltflächen **„⬇ Liste als CSV“** und 
 Pro Sensor stehen darin: Entitäts-ID, Name, Gerät, Hersteller, Modell, Integration, Geräte-/Zustandsklasse, Einheit, aktueller Zustand, ob er einen Wert liefert, Alter der letzten Aktualisierung und ob eine Langzeitstatistik besteht.
 Die Datei enthält nur Namen und aktuelle Werte deiner Sensoren, keine Zugangsdaten.
 
+## Szenario by Claude (fertige Ansichten per Update)
+Das Widget **„Szenario by Claude“** bringt komplette, auf dieses Haus zugeschnittene Ansichten mit. Du wählst nur das Szenario aus; Widgets, Helfer, Referenz-Zähler und Beschriftungen kommen fertig mit.
+Neue oder geänderte Szenarien kommen mit einem **⟳ Update** in `energy.js`.
+
+Enthaltene Szenarien:
+- **Kapellenweg 6 · Energiefluss & Bilanz:** Energiefluss (Sonnen + 2× Marstek), Speicher, Geräte und Energiebilanz mit Hausstrom-/Heizstrom-Zähler als Referenz, K4 als anderer Bereich.
+- **Kapellenweg 6 · Verlauf:** Diagramm mit PV, Netz (±), Speicher (±), Hausstrom und K4.
+- **Kapellenweg 6 · Geräte & Top-Verbraucher.**
+
+Im Editor des Widgets gibt es ein Feld **„Dein Änderungswunsch an Claude“** und den Knopf **„Wunsch + Konfiguration für Claude kopieren“**: Der Inhalt (Wunsch, Szenario, Version, komplette Kartenkonfiguration) landet in der Zwischenablage und kann im Chat eingefügt werden.
+Tipp: Ein Szenario am besten in einer **eigenen Karte** einsetzen, damit es sich nicht mit eigenen Energiefluss-Widgets derselben Karte überschneidet.
+
 ## Widgets
 | Typ | Zweck |
 |---|---|
