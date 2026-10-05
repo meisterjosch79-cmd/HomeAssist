@@ -66,6 +66,15 @@ Im Auswahldialog der Felder **Geräte** (Geräteverbrauch-Widget) und **Hausverb
 und lässt sich wie ein normaler Sensor in Listen anzeigen und zur Hausverbrauch-Summe addieren. Er funktioniert in allen Zeiträumen (W bzw. kWh).
 Er zählt selbst nicht als Verbraucher der Bilanz, damit keine Rückkopplung entsteht.
 
+### So rechnet die Energiebilanz (Haus mit Nachbarbereich)
+1. **Hausverbrauch gesamt** = Solar + Netzbezug + Batterie-Entladung − Einspeisung − Batterie-Ladung.
+2. **− Andere Bereiche** (Feld „Von ‚nicht zugeordnet‘ abziehen“ im Energiefluss, z. B. Kapellenweg 4) = **Verbrauch dieses Hauses**.
+3. **− Geräte** (Sensoren aus den Geräteverbrauch-Widgets) = **Energiemenge nicht zugeordnet**.
+
+Was „nicht zugeordnet“ ist, lässt sich nicht messen, sondern nur als Differenz berechnen: Verbraucher ohne eigenen Sensor (Licht, Steckdosen, Standby, Geräte ohne Messung),
+Wandlungsverluste (Wechselrichter, Batterie) und Messabweichungen der Zähler. Willst du den Rest weiter aufteilen, hilft ein zusätzlicher Messsensor (Zwischenstecker, Unterzähler)
+oder ein Helfer, der bekannte Teilbereiche zusammenfasst.
+
 ### Zusammensetzung von „Nicht zugeordnet“ einstellen
 Im Karten-Editor gibt es die Sektion **„⚖️ Nicht zugeordnet — Zusammensetzung“**. Sie listet alle Sensoren, aus denen sich die nicht zugeordnete Energiemenge ergibt
 (Solar, Netz, Batterie und alle Verbraucher aus den Widgets), sortiert nach Leistung und mit Live-Wert. Pro Sensor wählst du **Addieren**, **Subtrahieren** oder **Ignorieren**

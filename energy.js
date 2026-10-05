@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.24.1";
+const OB_VERSION = "0.25.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -82,10 +82,10 @@ function balanceCollect(ws, bw) {
   }
   const skip = new Set([...seen, ...toIds(bw.exclude), VIRT]);
   const cons = new Map();
-  const addC = (wd, id) => { if (!skip.has(id) && !cons.has(id)) cons.set(id, { f: sgn(wd, id), wd }); };
-  for (const wd of ws.filter((x) => x.type === "devices")) toIds(wd.entities).forEach((id) => addC(wd, id));
-  for (const wd of ws.filter((x) => x.type === "flow")) toIds(wd.deduct).forEach((id) => addC(wd, id));
-  toIds(bw.entities).forEach((id) => addC(bw, id));
+  const addC = (wd, id, kind) => { if (!skip.has(id) && !cons.has(id)) cons.set(id, { f: sgn(wd, id), wd, kind }); };
+  for (const wd of ws.filter((x) => x.type === "devices")) toIds(wd.entities).forEach((id) => addC(wd, id, "device"));
+  for (const wd of ws.filter((x) => x.type === "flow")) toIds(wd.deduct).forEach((id) => addC(wd, id, "area"));
+  toIds(bw.entities).forEach((id) => addC(bw, id, "device"));
   return { roles, cons, seen };
 }
 /** Wendet die Einstellungen „Ignorieren / Addieren / Subtrahieren“ auf die gesammelten Quellen und Verbraucher an */
@@ -100,7 +100,7 @@ function balanceApply(roles, cons, ov) {
     if (o === "ignore") cons.delete(id); else if (o === "add") it.f = -it.f;
   }
 }
-const BAL_DEFAULT = { solar: "add", grid: "add", battery: "sub", consumer: "sub" };
+const BAL_DEFAULT = { solar: "add", grid: "add", battery: "sub", area: "sub", consumer: "sub" };
 const PERIODS = { now: "Aktuell", day: "Tag", week: "Woche", month: "Monat", year: "Jahr" };
 const canon = (o) => JSON.stringify(o, (k, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -343,7 +343,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const supply = (m.solar || 0) + (m.grid || 0) + (batIn || 0);
     let rows = [...m.cons].map(([id, c]) => {
       const raw = this._watts(id);
-      return { id, wd: c.wd, v: raw === null ? null : raw * c.f };
+      return { id, wd: c.wd, kind: c.kind, v: raw === null ? null : raw * c.f };
     });
     // Zeiträume: hat ein Gerät einen Energiezähler UND einen Leistungssensor in der Liste, zählt nur der Zähler (sonst doppelt gezählt)
     const skipped = [];
@@ -352,8 +352,10 @@ class OmniBatteryDashboard extends HTMLElement {
       const hasEn = new Set(rows.filter((r) => this._isEnergy(r.id) && dev(r.id)).map((r) => dev(r.id)));
       rows = rows.filter((r) => { const dup = !this._isEnergy(r.id) && dev(r.id) && hasEn.has(dev(r.id)); if (dup) skipped.push(r); return !dup; });
     }
-    const used = rows.reduce((a, r) => a + (r.v || 0), 0);
-    return { m, batIn, supply, rows, used, rest: supply - used, skipped };
+    const areaRows = rows.filter((r) => r.kind === "area"), devRows = rows.filter((r) => r.kind !== "area");
+    const areaUsed = areaRows.reduce((a, r) => a + (r.v || 0), 0), devUsed = devRows.reduce((a, r) => a + (r.v || 0), 0);
+    const used = areaUsed + devUsed, houseUse = supply - areaUsed;
+    return { m, batIn, supply, rows, areaRows, devRows, areaUsed, devUsed, houseUse, used, rest: supply - used, skipped };
   }
   /** Wert des virtuellen Sensors „nicht zugeordnet“ (W bzw. kWh) */
   _unassigned(raw = false) {
@@ -367,14 +369,19 @@ class OmniBatteryDashboard extends HTMLElement {
   _balance(w) {
     const now = this._period === "now", c = this._balanceCalc(w);
     if (!c) return `<div class="sub">Lege ein <b>Energiefluss</b>-Widget mit Solar / Netz / Batterie an – dessen Sensoren übernimmt die Bilanz automatisch.</div>`;
-    const { m, batIn, supply, rows, used, rest } = c;
+    const { m, batIn, supply, areaRows, devRows, areaUsed, devUsed, houseUse, rest } = c;
+    const rows = [...areaRows, ...devRows];
     const uncounted = rows.filter((r) => r.v === null).length;
-    const tol = Math.max(Math.abs(supply) * 0.05, now ? 30 : 0.05);
+    const tol = Math.max(Math.abs(houseUse) * 0.05, now ? 30 : 0.05);
     const col = rest < -tol ? "#c0392b" : Math.abs(rest) <= tol ? "#2e9e5b" : "#e8833a";
-    const pct = supply > 0 ? Math.min(100, Math.max(0, used / supply * 100)) : 0;
+    const pct = houseUse > 0 ? Math.min(100, Math.max(0, devUsed / houseUse * 100)) : 0;
     const row = (label, v, cls = "") => `<div class="brow ${cls}"><span>${esc(label)}</span><b>${esc(this._fmtW(v))}</b></div>`;
     const max = Math.max(1e-9, ...rows.map((r) => Math.abs(r.v || 0)));
-    const sorted = [...rows].sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity));
+    const list = (rs, base) => [...rs].sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity)).map((r) => {
+      const big = r.v !== null && base > 0 && r.v > base;
+      return `<div class="brow"><span title="${esc(r.id)}${big ? " – größer als der gesamte Zufluss: vermutlich ein Gesamtzähler" : ""}">${big ? "⚠ " : ""}${esc(this._label(r.wd, r.id))}</span><b>${esc(r.v === null ? "–" : this._fmtW(r.v))}</b></div>
+        ${r.v !== null ? `<div class="bar"><i style="width:${Math.min(100, Math.abs(r.v) / max * 100)}%"></i></div>` : ""}`;
+    }).join("");
     const home = (this._config.widgets || []).filter((x) => x.type === "flow" && this._ids(x.home).length).map((x) => this._sumW(x.home, x)).find((v) => v !== null);
     // Beitrag jedes Quell-Sensors zum Zufluss (mit Vorzeichen) – zeigt, welcher Sensor die Summe verfälscht
     const src = (role, k) => this._use([...m.roles[role].keys()]).map((id) => {
@@ -383,23 +390,23 @@ class OmniBatteryDashboard extends HTMLElement {
       return `<div class="brow sub"><span title="${esc(id)}">↳ ${esc(this._label(m.roles[role].get(id).wd, id))}</span><b>${esc(t)}</b></div>`;
     }).join("");
     return `<div class="bal">
-      <div class="bsec">Hausverbrauch aus den Quellen</div>
+      <div class="bsec">1 · Hausverbrauch aus den Quellen</div>
       <div class="sub">Solar + Netzbezug + Batterie-Entladung − Einspeisung − Batterie-Ladung</div>
       ${m.solar !== null ? row("☀️ Solar", m.solar) + src("solar", 1) : ""}
       ${m.grid !== null ? row(m.grid >= 0 ? "🏭 Netzbezug" : "🏭 Einspeisung (netto)", m.grid) + src("grid", 1) : ""}
       ${batIn !== null ? row(batIn >= 0 ? "🔋 Batterie entlädt" : "🔋 Batterie lädt (netto)", batIn) + src("battery", -1) : ""}
-      ${row("= Hausverbrauch (berechnet)", supply, "tot")}
+      ${row("= Hausverbrauch gesamt (berechnet)", supply, "tot")}
       ${home !== undefined ? `<div class="sub">Gemessener Hausverbrauch (Energiefluss): ${esc(this._fmtW(home))}</div>` : ""}
-      <div class="bsec">Davon erklärt durch Verbraucher (${rows.length})</div>
-      ${sorted.map((r) => `<div class="brow"><span title="${esc(r.id)}${r.v !== null && supply > 0 && r.v > supply ? " – größer als der gesamte Zufluss: vermutlich ein Gesamtzähler" : ""}">${r.v !== null && supply > 0 && r.v > supply ? "⚠ " : ""}${esc(this._label(r.wd, r.id))}</span><b>${esc(r.v === null ? "–" : this._fmtW(r.v))}</b></div>
-        ${r.v !== null ? `<div class="bar"><i style="width:${Math.min(100, Math.abs(r.v) / max * 100)}%"></i></div>` : ""}`).join("") || '<div class="sub">Noch keine Verbraucher: Sensoren im <b>Geräteverbrauch</b>-Widget werden automatisch übernommen.</div>'}
-      ${rows.some((r) => r.v !== null && supply > 0 && r.v > supply) ? `<div class="sub">⚠ Dieser Verbraucher ist größer als der gesamte Zufluss – vermutlich ein Gesamt- oder Hauptzähler. Blende ihn über „Ignorieren“ aus.</div>` : ""}
+      ${areaRows.length ? `<div class="bsec">2 · Abzüglich anderer Bereiche (${areaRows.length})</div>${list(areaRows, supply)}${row("= Verbrauch dieses Hauses", houseUse, "tot")}` : ""}
+      <div class="bsec">${areaRows.length ? "3" : "2"} · Davon erklärt durch Geräte (${devRows.length})</div>
+      ${list(devRows, houseUse) || '<div class="sub">Noch keine Geräte: Sensoren im <b>Geräteverbrauch</b>-Widget werden automatisch übernommen.</div>'}
+      ${areaRows.some((r) => r.v !== null && supply > 0 && r.v > supply) || devRows.some((r) => r.v !== null && houseUse > 0 && r.v > houseUse) ? `<div class="sub">⚠ Ein Eintrag ist größer als der gesamte Zufluss – vermutlich ein Gesamt- oder Hauptzähler. Blende ihn über „Ignorieren“ aus.</div>` : ""}
       ${c.skipped.length ? `<div class="sub">Nicht doppelt gezählt (Gerät hat Energiezähler): ${esc(c.skipped.map((r) => this._label(r.wd, r.id)).join(", "))}</div>` : ""}
       ${uncounted ? `<div class="sub">${uncounted} Zähler ohne Leistungswert sind in „Aktuell“ nicht eingerechnet (nur Tag–Jahr).</div>` : ""}
-      ${row("Verbraucher gesamt", used, "tot")}
+      ${row("Geräte gesamt", devUsed, "tot")}
       <div class="stack"><i style="width:${pct.toFixed(1)}%"></i></div>
       <div class="rest" style="--c:${col}"><div><div class="nl">Energiemenge nicht zugeordnet</div>
-        <div class="sub">${rest < -tol ? "Verbraucher übersteigen den Zufluss" : Math.abs(rest) <= tol ? "Alles zugeordnet ✓" : supply > 0 ? (100 - pct).toFixed(0) + " % des Zuflusses fehlen in der Zuordnung" : ""}</div></div>
+        <div class="sub">${rest < -tol ? "Geräte übersteigen den Verbrauch des Hauses" : Math.abs(rest) <= tol ? "Alles zugeordnet ✓" : houseUse > 0 ? (100 - pct).toFixed(0) + " % des Hausverbrauchs: ungemessene Verbraucher, Standby, Verluste oder Messabweichung" : ""}</div></div>
         <div class="nv">${esc(this._fmtW(rest))}</div></div></div>`;
   }
 
@@ -1116,7 +1123,8 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       ["☀️ Solar (Zufluss)", "solar", [...roles.solar.entries()]],
       ["🏭 Netz (Zufluss)", "grid", [...roles.grid.entries()]],
       ["🔋 Batterie (Entladen = Zufluss, Laden = Abfluss)", "battery", [...roles.battery.entries()]],
-      ["🏠 Verbraucher (werden abgezogen)", "consumer", [...cons.entries()]],
+      ["🏘 Andere Bereiche (werden vom Zufluss abgezogen)", "area", [...cons.entries()].filter(([, it]) => it.kind === "area")],
+      ["🏠 Geräte dieses Hauses (erklären den Verbrauch)", "consumer", [...cons.entries()].filter(([, it]) => it.kind !== "area")],
     ];
     const sec = document.createElement("details");
     sec.open = !!this._uopen;
