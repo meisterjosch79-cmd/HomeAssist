@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.26.1";
+const OB_VERSION = "0.27.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -59,12 +59,14 @@ const SCHEMAS = {
 
 // Virtueller Sensor: "Nicht zugeordnete Energiemenge" aus der Energiebilanz, nutzbar in Geräteliste und Hausverbrauch
 const VIRT = "virtual:unassigned", VIRT_NAME = "Nicht zugeordnete Energiemenge";
+// zweiter virtueller Sensor: Differenz zwischen berechnetem Verbrauch (Quellen) und dem gemessenen Referenz-Zähler
+const VIRT_LOSS = "virtual:losses", VIRT_LOSS_NAME = "Anlagenverluste & Messabweichung";
 // Helfer = vom Nutzer definierte virtuelle Sensoren (Summe/Differenz mehrerer Sensoren), Id "virtual:helper:<id>"
 const HELP_PREFIX = "virtual:helper:";
 const PAL = ["#03a9f4", "#e8833a", "#2e9e5b", "#9c27b0", "#e0a800", "#d81b60", "#00897b", "#6d4c41"];
 const toIds = (v) => (Array.isArray(v) ? v : v ? [v] : []);
 /** Sammelt Quellen (Solar/Netz/Batterie) und Verbraucher der Energiebilanz aus allen Widgets der Karte (jeder Sensor nur einmal) */
-function balanceCollect(ws, bw) {
+function balanceCollect(ws, bw, refIds = []) {
   const sgn = (wd, id) => (wd.signs?.[id] === -1 ? -1 : 1);
   const roles = { solar: new Map(), grid: new Map(), battery: new Map() };
   const seen = new Set();
@@ -80,7 +82,7 @@ function balanceCollect(ws, bw) {
     const ib = wd.invert_power ? -1 : 1;
     toIds(wd.power).forEach((id) => put("battery", wd, id, sgn(wd, id) * ib));
   }
-  const skip = new Set([...seen, ...toIds(bw.exclude), VIRT]);
+  const skip = new Set([...seen, ...toIds(bw.exclude), ...toIds(refIds), VIRT, VIRT_LOSS]);
   const cons = new Map();
   const addC = (wd, id, kind) => { if (!skip.has(id) && !cons.has(id)) cons.set(id, { f: sgn(wd, id), wd, kind }); };
   for (const wd of ws.filter((x) => x.type === "devices")) toIds(wd.entities).forEach((id) => addC(wd, id, "device"));
@@ -180,7 +182,7 @@ class OmniBatteryDashboard extends HTMLElement {
   }
 
   /** Anzeigename eines Sensors im Widget (eigener Name oder Entity-Name) */
-  _label(w, id) { return w.names?.[id] || (id === VIRT ? VIRT_NAME + " (virtuell)" : null) || this._helper(id)?.name || this._st(id)?.attributes?.friendly_name || id; }
+  _label(w, id) { return w.names?.[id] || (id === VIRT ? VIRT_NAME + " (virtuell)" : id === VIRT_LOSS ? VIRT_LOSS_NAME + " (virtuell)" : null) || this._helper(id)?.name || this._st(id)?.attributes?.friendly_name || id; }
   /** Kleine Einzelwerte aller Sensoren eines Widget-Feldes */
   _parts(w, ids, always = false) {
     ids = ids.filter(Boolean);
@@ -196,7 +198,7 @@ class OmniBatteryDashboard extends HTMLElement {
   /** Sensoren eines Feldes, die im aktuellen Zeitraum zählen:
    *  Aktuell = nur Leistungssensoren; Tag/Woche/Monat/Jahr = Energiezähler, sonst Leistung (Statistik-Mittelwert × Zeit). */
   _use(v) {
-    const ids = this._ids(v), en = ids.filter((i) => this._isEnergy(i)), virt = ids.filter((i) => i === VIRT || String(i).startsWith(HELP_PREFIX));
+    const ids = this._ids(v), en = ids.filter((i) => this._isEnergy(i)), virt = ids.filter((i) => i === VIRT || i === VIRT_LOSS || String(i).startsWith(HELP_PREFIX));
     if (this._period === "now") return ids.filter((i) => !this._isEnergy(i));
     return en.length ? [...en, ...virt] : ids;
   }
@@ -216,6 +218,7 @@ class OmniBatteryDashboard extends HTMLElement {
   /** Wert in Watt, berücksichtigt kW/MW */
   _watts(id) {
     if (id === VIRT) return this._unassigned();
+    if (id === VIRT_LOSS) return this._losses();
     const hp = this._helper(id);
     if (hp) {  // Helfer: Komponenten (Sensoren und andere Helfer) addieren bzw. (bei „abziehen“) subtrahieren
       const seen = (this._hseen ||= new Set());
@@ -326,7 +329,7 @@ class OmniBatteryDashboard extends HTMLElement {
 
   /** Sammelt Quellen und Verbraucher automatisch aus den anderen Widgets dieser Karte (jeder Sensor nur einmal). */
   _balanceModel(w) {
-    const { roles, cons, seen } = balanceCollect(this._config.widgets || [], w);
+    const { roles, cons, seen } = balanceCollect(this._config.widgets || [], w, this._config.balance_ref);
     // Einstellungen „Nicht zugeordnet – Zusammensetzung“: ignorieren / addieren / subtrahieren je Sensor
     balanceApply(roles, cons, this._config.unassigned_ov || {});
     const sum = (m) => {
@@ -356,8 +359,18 @@ class OmniBatteryDashboard extends HTMLElement {
     }
     const areaRows = rows.filter((r) => r.kind === "area"), devRows = rows.filter((r) => r.kind !== "area");
     const areaUsed = areaRows.reduce((a, r) => a + (r.v || 0), 0), devUsed = devRows.reduce((a, r) => a + (r.v || 0), 0);
-    const used = areaUsed + devUsed, houseUse = supply - areaUsed;
-    return { m, batIn, supply, rows, areaRows, devRows, areaUsed, devUsed, houseUse, used, rest: supply - used, skipped };
+    // Referenz-Zähler (z. B. Hausstrom-Zähler hinter Solar/Speicher): gemessener Gesamtverbrauch ersetzt den aus den Quellen berechneten
+    const refIds = this._ids(this._config.balance_ref);
+    const refSum = refIds.length ? this._sumW(refIds, {}) : null;
+    const hasRef = refSum !== null;
+    const houseTotal = hasRef ? refSum : supply, loss = hasRef ? supply - refSum : null;
+    const used = areaUsed + devUsed, houseUse = houseTotal - areaUsed;
+    return { m, batIn, supply, hasRef, refSum, loss, houseTotal, rows, areaRows, devRows, areaUsed, devUsed, houseUse, used, rest: houseTotal - used, skipped };
+  }
+  /** Wert des virtuellen Sensors „Anlagenverluste & Messabweichung“ = Quellen − Referenz-Zähler (null ohne Referenz) */
+  _losses() {
+    const bw = (this._config.widgets || []).find((x) => x.type === "balance") || {};
+    return this._balanceCalc(bw)?.loss ?? null;
   }
   /** Wert des virtuellen Sensors „nicht zugeordnet“ (W bzw. kWh) */
   _unassigned(raw = false) {
@@ -371,7 +384,7 @@ class OmniBatteryDashboard extends HTMLElement {
   _balance(w) {
     const now = this._period === "now", c = this._balanceCalc(w);
     if (!c) return `<div class="sub">Lege ein <b>Energiefluss</b>-Widget mit Solar / Netz / Batterie an – dessen Sensoren übernimmt die Bilanz automatisch.</div>`;
-    const { m, batIn, supply, areaRows, devRows, areaUsed, devUsed, houseUse, rest } = c;
+    const { m, batIn, supply, hasRef, refSum, loss, houseTotal, areaRows, devRows, areaUsed, devUsed, houseUse, rest } = c;
     const rows = [...areaRows, ...devRows];
     const uncounted = rows.filter((r) => r.v === null).length;
     const tol = Math.max(Math.abs(houseUse) * 0.05, now ? 30 : 0.05);
@@ -398,11 +411,12 @@ class OmniBatteryDashboard extends HTMLElement {
       ${m.grid !== null ? row(m.grid >= 0 ? "🏭 Netzbezug" : "🏭 Einspeisung (netto)", m.grid) + src("grid", 1) : ""}
       ${batIn !== null ? row(batIn >= 0 ? "🔋 Batterie entlädt" : "🔋 Batterie lädt (netto)", batIn) + src("battery", -1) : ""}
       ${row("= Hausverbrauch gesamt (berechnet)", supply, "tot")}
-      ${home !== undefined ? `<div class="sub">Gemessener Hausverbrauch (Energiefluss): ${esc(this._fmtW(home))}</div>` : ""}
-      ${areaRows.length ? `<div class="bsec">2 · Abzüglich anderer Bereiche (${areaRows.length})</div>${list(areaRows, supply)}${row("= Verbrauch dieses Hauses", houseUse, "tot")}` : ""}
+      ${hasRef ? `<div class="bsec">Referenz-Zähler (gemessen hinter den Quellen)</div>${row("Gemessen am Referenz-Zähler", refSum)}${row("Differenz Quellen − Zähler: Verluste, Standby, Messabweichung", loss)}` : ""}
+      ${home !== undefined && !hasRef ? `<div class="sub">Gemessener Hausverbrauch (Energiefluss): ${esc(this._fmtW(home))}</div>` : ""}
+      ${areaRows.length ? `<div class="bsec">2 · Abzüglich anderer Bereiche (${areaRows.length})</div>${list(areaRows, houseTotal)}${row("= Verbrauch dieses Hauses", houseUse, "tot")}` : ""}
       <div class="bsec">${areaRows.length ? "3" : "2"} · Davon erklärt durch Geräte (${devRows.length})</div>
       ${list(devRows, houseUse) || '<div class="sub">Noch keine Geräte: Sensoren im <b>Geräteverbrauch</b>-Widget werden automatisch übernommen.</div>'}
-      ${areaRows.some((r) => r.v !== null && supply > 0 && r.v > supply) || devRows.some((r) => r.v !== null && houseUse > 0 && r.v > houseUse) ? `<div class="sub">⚠ Ein Eintrag ist größer als der gesamte Zufluss – vermutlich ein Gesamt- oder Hauptzähler. Blende ihn über „Ignorieren“ aus.</div>` : ""}
+      ${areaRows.some((r) => r.v !== null && houseTotal > 0 && r.v > houseTotal) || devRows.some((r) => r.v !== null && houseUse > 0 && r.v > houseUse) ? `<div class="sub">⚠ Ein Eintrag ist größer als der gesamte Zufluss – vermutlich ein Gesamt- oder Hauptzähler. Blende ihn über „Ignorieren“ aus.</div>` : ""}
       ${c.skipped.length ? `<div class="sub">Nicht doppelt gezählt (Gerät hat Energiezähler): ${esc(c.skipped.map((r) => this._label(r.wd, r.id)).join(", "))}</div>` : ""}
       ${uncounted ? `<div class="sub">${uncounted} Zähler ohne Leistungswert sind in „Aktuell“ nicht eingerechnet (nur Tag–Jahr).</div>` : ""}
       ${row("Geräte gesamt", devUsed, "tot")}
@@ -731,7 +745,7 @@ class OmniBatteryDashboard extends HTMLElement {
       comps.filter((x) => String(x).startsWith(HELP_PREFIX)).forEach((x) => expand(x, seen));
     };
     for (const id of [...ids]) if (this._helper(id)) { ids.delete(id); expand(id); }
-    ids.delete(VIRT);
+    ids.delete(VIRT); ids.delete(VIRT_LOSS);
     if (!ids.size) return;
     this._statBusy = true; this._loading = !this._stat[p]; if (this._loading) this._render();
     const T = (v) => (typeof v === "number" ? v : Date.parse(v));
@@ -967,13 +981,13 @@ class ObEntityPicker extends HTMLElement {
 
   _hp(id) { return String(id).startsWith(HELP_PREFIX) ? (this._opts?.getHelpers?.() || []).find((x) => x.id === id) || { id, name: "Helfer (gelöscht)" } : null; }
   _val(id) {
-    if (id === VIRT || String(id).startsWith(HELP_PREFIX)) return "berechnet";
+    if (id === VIRT || id === VIRT_LOSS || String(id).startsWith(HELP_PREFIX)) return "berechnet";
     const st = this._hass?.states?.[id]; if (!st) return "n/a";
     try { if (this._hass.formatEntityState) return this._hass.formatEntityState(st); } catch (e) { /* fallback */ }
     return `${st.state} ${st.attributes.unit_of_measurement || ""}`.trim();
   }
   _devName(id) {
-    if (id === VIRT) return "Virtuell";
+    if (id === VIRT || id === VIRT_LOSS) return "Virtuell";
     if (String(id).startsWith(HELP_PREFIX)) return "Helfer";
     const did = this._hass?.entities?.[id]?.device_id;
     const d = did && this._hass.devices?.[did];
@@ -981,6 +995,7 @@ class ObEntityPicker extends HTMLElement {
   }
   _entName(id) {
     if (id === VIRT) return VIRT_NAME;
+    if (id === VIRT_LOSS) return VIRT_LOSS_NAME;
     if (String(id).startsWith(HELP_PREFIX)) return this._hp(id).name;
     const n = this._hass?.states?.[id]?.attributes?.friendly_name || id;
     const dn = this._devName(id);
@@ -995,10 +1010,10 @@ class ObEntityPicker extends HTMLElement {
   _candidates() {
     const o = this._all ? {} : this._opts || {}, st = this._hass?.states || {};
     const list = Object.keys(st);
-    if (this._opts?.virtual && this._minW == null) list.unshift(VIRT);
+    if (this._opts?.virtual && this._minW == null) list.unshift(VIRT, VIRT_LOSS);
     if (this._opts?.getHelpers && this._minW == null) list.unshift(...this._opts.getHelpers().map((x) => x.id));
     return list.filter((id) => {
-      if (id === VIRT || id.startsWith(HELP_PREFIX)) return true;
+      if (id === VIRT || id === VIRT_LOSS || id.startsWith(HELP_PREFIX)) return true;
       if (o.domain && !id.startsWith(o.domain + ".")) return false;
       const a = st[id].attributes;
       if (this._minW != null) { const w = this._wattsOf(id); if (w === null || w < this._minW) return false; }
@@ -1128,9 +1143,11 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   /** Beiträge aller Sensoren zu „nicht zugeordnet“ (jetziger Wert, in W) */
   _unCalc() {
     const bw = (this._config.widgets || []).find((x) => x.type === "balance") || {};
-    const { roles, cons } = balanceCollect(this._config.widgets || [], bw);
+    const { roles, cons } = balanceCollect(this._config.widgets || [], bw, this._config.balance_ref);
     balanceApply(roles, cons, this._config.unassigned_ov || {});
     const contrib = new Map(); let supply = 0, used = 0;
+    const refIds = toIds(this._config.balance_ref); let refW = null;
+    for (const id of refIds) { const v = this._pwr(id); if (v !== null) refW = (refW || 0) + v; }
     for (const [role, m] of Object.entries(roles)) for (const [id, it] of m) {
       const v = this._pwr(id); if (v === null) { contrib.set(id, null); continue; }
       const c = (role === "battery" ? -1 : 1) * it.f * v; contrib.set(id, c); supply += c;
@@ -1139,7 +1156,8 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       const v = this._pwr(id); if (v === null) { contrib.set(id, null); continue; }
       const c = -it.f * v; contrib.set(id, c); used += -c;
     }
-    return { contrib, supply, used, rest: supply - used };
+    const base = refW !== null ? refW : supply;
+    return { contrib, supply, used, refW, rest: base - used };
   }
   _refreshUn() {
     const c = this._unCalc();
@@ -1149,7 +1167,9 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       cel.textContent = v === undefined ? "ignoriert" : v === null ? "–" : (v > 0 ? "+" : "") + this._fW(v);
       cel.style.opacity = v === undefined || v === null ? ".5" : "";
     });
-    if (this._unsum) this._unsum.innerHTML = `Jetzt: Zufluss <b>${esc(this._fW(c.supply))}</b> − Verbraucher <b>${esc(this._fW(c.used))}</b> = nicht zugeordnet <b>${esc(this._fW(c.rest))}</b>`;
+    if (this._unsum) this._unsum.innerHTML = c.refW !== null
+      ? `Jetzt: Referenz-Zähler <b>${esc(this._fW(c.refW))}</b> − Verbraucher <b>${esc(this._fW(c.used))}</b> = nicht zugeordnet <b>${esc(this._fW(c.rest))}</b><br>Quellen (Zufluss) <b>${esc(this._fW(c.supply))}</b> − Referenz = Verluste &amp; Messabweichung <b>${esc(this._fW(c.supply - c.refW))}</b>`
+      : `Jetzt: Zufluss <b>${esc(this._fW(c.supply))}</b> − Verbraucher <b>${esc(this._fW(c.used))}</b> = nicht zugeordnet <b>${esc(this._fW(c.rest))}</b>`;
   }
 
   /** Sektion „Nicht zugeordnet – Zusammensetzung“: alle Sensoren, aus denen sich der Wert ergibt, mit Auswahl Ignorieren / Addieren / Subtrahieren */
@@ -1157,7 +1177,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     const host = this.querySelector("#usec"); if (!host) return;
     this._unow = [];
     const bw = (this._config.widgets || []).find((x) => x.type === "balance") || {};
-    const { roles, cons } = balanceCollect(this._config.widgets || [], bw);
+    const { roles, cons } = balanceCollect(this._config.widgets || [], bw, this._config.balance_ref);
     const groups = [
       ["☀️ Solar (Zufluss)", "solar", [...roles.solar.entries()]],
       ["🏭 Netz (Zufluss)", "grid", [...roles.grid.entries()]],
@@ -1171,6 +1191,15 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     sec.innerHTML = `<summary>⚖️ Nicht zugeordnet — Zusammensetzung</summary>
       <div class="sub" style="margin:6px 0">Spalte 2 = aktueller Messwert, Spalte 3 = <b>Beitrag zu „nicht zugeordnet“</b> (+ erhöht, − verringert). Helfer zeigen ihren berechneten Wert. „Nicht zugeordnet“ = Zufluss (Solar + Netz + Batterie-Entladung) − alle Verbraucher. Die Sensoren werden automatisch aus den Widgets übernommen. Hier legst du je Sensor fest, ob er <b>addiert</b>, <b>subtrahiert</b> oder <b>ignoriert</b> wird. Die Standardeinstellung steht jeweils dabei; sortiert nach der größten Leistung.</div>`;
     const sum = document.createElement("div"); sum.className = "usum"; this._unsum = sum; sec.appendChild(sum);
+    const rp = document.createElement("ob-entity-picker");
+    rp.options = { label: "Referenz-Zähler — gemessener Gesamtverbrauch hinter Solar/Speicher (z. B. Hausstrom-Zähler L1–L3). Leer = Verbrauch aus den Quellen berechnen", multiple: true, noNames: true, domain: "sensor", classes: ["power", "energy"], units: U_POWER, getHelpers: () => this._helperList() };
+    rp.value = this._config.balance_ref; rp.hass = this._hass;
+    rp.addEventListener("picked", (ev) => {
+      ev.stopPropagation();
+      if (ev.detail.value.length) this._config.balance_ref = ev.detail.value; else delete this._config.balance_ref;
+      this._emit(); this._refreshUn();
+    });
+    sec.appendChild(rp);
     const OPT = { add: "＋ Addieren", sub: "− Subtrahieren", ignore: "⊘ Ignorieren" };
     if (!groups.some((g) => g[2].length)) {
       const e = document.createElement("div"); e.className = "sub"; e.textContent = "Noch keine Quellen: Lege ein Energiefluss-Widget mit Solar / Netz / Batterie an.";

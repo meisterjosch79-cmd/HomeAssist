@@ -75,6 +75,14 @@ Was „nicht zugeordnet“ ist, lässt sich nicht messen, sondern nur als Differ
 Wandlungsverluste (Wechselrichter, Batterie) und Messabweichungen der Zähler. Willst du den Rest weiter aufteilen, hilft ein zusätzlicher Messsensor (Zwischenstecker, Unterzähler)
 oder ein Helfer, der bekannte Teilbereiche zusammenfasst.
 
+### Referenz-Zähler (Zähler hinter Solar/Speicher)
+Hängt Solar und Speicher **vor** dem Hausstrom-Zähler (dieser misst nur den Verbrauch dahinter), trägst du im Editor in der Sektion „Nicht zugeordnet — Zusammensetzung“ unter
+**Referenz-Zähler** den gemessenen Gesamtverbrauch ein (z. B. Hausstrom L1–L3). Dann gilt:
+
+- **Verbrauch gesamt = Referenz-Zähler** (statt aus Solar/Netz/Batterie berechnet).
+- **Nicht zugeordnet** = Referenz − andere Bereiche (z. B. K4) − Geräte.
+- Neuer virtueller Sensor **„Anlagenverluste & Messabweichung“** = berechneter Verbrauch aus den Quellen − Referenz-Zähler (Wechselrichter-/Batterieverluste, Standby, Messabweichungen). Er ist wie „nicht zugeordnet“ in den Listen wählbar.
+
 ### Zusammensetzung von „Nicht zugeordnet“ einstellen
 Im Karten-Editor gibt es die Sektion **„⚖️ Nicht zugeordnet — Zusammensetzung“**. Sie listet alle Sensoren, aus denen sich die nicht zugeordnete Energiemenge ergibt
 (Solar, Netz, Batterie und alle Verbraucher aus den Widgets), sortiert nach Leistung und mit Live-Wert. Pro Sensor wählst du **Addieren**, **Subtrahieren** oder **Ignorieren**
