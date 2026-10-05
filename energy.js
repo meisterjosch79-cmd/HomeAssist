@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.20.0";
+const OB_VERSION = "0.20.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -145,7 +145,7 @@ class OmniBatteryDashboard extends HTMLElement {
   _parts(w, ids, always = false) {
     ids = ids.filter(Boolean);
     if (!ids.length || (!always && ids.length < 2 && !ids.some((id) => w.names?.[id]))) return "";
-    return `<div class="parts">${ids.map((id) => `<div><span title="${esc(id)}">${esc(this._label(w, id))}</span><b>${esc((w.signs?.[id] === -1 ? "− " : "") + this._fmtW(this._watts(id)))}</b></div>`).join("")}</div>`;
+    return `<div class="parts">${ids.map((id) => `<div><span title="${esc(id)}">${esc(this._label(w, id))}</span><b>${esc(id === VIRT && (this._unassigned(true) ?? 0) < 0 ? "⚠ " + this._fmtW(this._unassigned(true)) : (w.signs?.[id] === -1 ? "− " : "") + this._fmtW(this._watts(id)))}</b></div>`).join("")}</div>`;
   }
   _ids(v) { return Array.isArray(v) ? v : v ? [v] : []; }
   _helper(id) { return typeof id === "string" && id.startsWith(HELP_PREFIX) ? (this._config?.helpers || []).find((h) => h.id === id.slice(HELP_PREFIX.length)) : null; }
@@ -315,19 +315,26 @@ class OmniBatteryDashboard extends HTMLElement {
     if (!m.hasSrc) return null;
     const batIn = m.bat === null ? null : -m.bat;  // Entladen = Zufluss, Laden = Abfluss
     const supply = (m.solar || 0) + (m.grid || 0) + (batIn || 0);
-    const rows = [...m.cons].map(([id, c]) => {
+    let rows = [...m.cons].map(([id, c]) => {
       const raw = this._watts(id);
       return { id, wd: c.wd, v: raw === null ? null : raw * c.f };
     });
+    // Zeiträume: hat ein Gerät einen Energiezähler UND einen Leistungssensor in der Liste, zählt nur der Zähler (sonst doppelt gezählt)
+    const skipped = [];
+    if (this._period !== "now") {
+      const dev = (id) => this._hass?.entities?.[id]?.device_id;
+      const hasEn = new Set(rows.filter((r) => this._isEnergy(r.id) && dev(r.id)).map((r) => dev(r.id)));
+      rows = rows.filter((r) => { const dup = !this._isEnergy(r.id) && dev(r.id) && hasEn.has(dev(r.id)); if (dup) skipped.push(r); return !dup; });
+    }
     const used = rows.reduce((a, r) => a + (r.v || 0), 0);
-    return { m, batIn, supply, rows, used, rest: supply - used };
+    return { m, batIn, supply, rows, used, rest: supply - used, skipped };
   }
   /** Wert des virtuellen Sensors „nicht zugeordnet“ (W bzw. kWh) */
-  _unassigned() {
+  _unassigned(raw = false) {
     const bw = (this._config.widgets || []).find((x) => x.type === "balance") || {};
     const r = this._balanceCalc(bw)?.rest;
-    // negativ = Messfehler/Vorzeichenproblem (die Bilanz zeigt das rot); in Listen und Summen nie weniger als 0
-    return r == null ? null : Math.max(0, r);
+    // negativ = zu viele/doppelte Verbraucher oder Vorzeichenproblem; in Summen nie weniger als 0, in der Einzelzeile (raw) sichtbar
+    return r == null ? null : raw ? r : Math.max(0, r);
   }
 
   /** Energiebilanz: Zufluss (Solar + Netz − Batterie) abzüglich aller Verbraucher = nicht zugeordnet */
@@ -360,6 +367,7 @@ class OmniBatteryDashboard extends HTMLElement {
       <div class="bsec">Davon erklärt durch Verbraucher (${rows.length})</div>
       ${sorted.map((r) => `<div class="brow"><span title="${esc(r.id)}">${esc(this._label(r.wd, r.id))}</span><b>${esc(r.v === null ? "–" : this._fmtW(r.v))}</b></div>
         ${r.v !== null ? `<div class="bar"><i style="width:${Math.min(100, Math.abs(r.v) / max * 100)}%"></i></div>` : ""}`).join("") || '<div class="sub">Noch keine Verbraucher: Sensoren im <b>Geräteverbrauch</b>-Widget werden automatisch übernommen.</div>'}
+      ${c.skipped.length ? `<div class="sub">Nicht doppelt gezählt (Gerät hat Energiezähler): ${esc(c.skipped.map((r) => this._label(r.wd, r.id)).join(", "))}</div>` : ""}
       ${uncounted ? `<div class="sub">${uncounted} Zähler ohne Leistungswert sind in „Aktuell“ nicht eingerechnet (nur Tag–Jahr).</div>` : ""}
       ${row("Verbraucher gesamt", used, "tot")}
       <div class="stack"><i style="width:${pct.toFixed(1)}%"></i></div>
