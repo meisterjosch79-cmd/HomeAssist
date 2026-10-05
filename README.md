@@ -9,6 +9,11 @@ Alle Widgets (Batterie, Energiefluss, Einzelwert, Geräteverbrauch, Verlauf) wer
 2. *Einstellungen → Dashboards → ⋮ → Ressourcen → Hinzufügen*: URL `/local/energy.js`, Typ **JavaScript-Modul**.
 3. Dashboard bearbeiten → *Karte hinzufügen* → **OmniBattery Dashboard**.
 
+## Browser-Cache
+Home Assistant liefert Dateien aus `/config/www/` mit langer Cache-Zeit aus. Jeder Browser kann deshalb eine alte `energy.js` behalten. Die Karte prüft beim Laden
+selbst, ob der Server eine neuere Version hat, frischt dann den Cache auf und lädt die Seite einmal neu. Hat ein Browser noch eine **sehr alte** Version ohne diese Prüfung
+(erkennbar an „Unbekannter Typ: …“ in der Karte), einmal **Strg+Shift+R** drücken bzw. den Cache der Seite löschen.
+
 ## Update per Knopfdruck
 Die Karte hat unten den Button **⟳ Update**. Er lässt Home Assistant die neueste `energy.js`
 aus GitHub laden und lädt danach die Seite neu. Voraussetzung: öffentliches Repo.

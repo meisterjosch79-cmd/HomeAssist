@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.20.4";
+const OB_VERSION = "0.21.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -1176,3 +1176,19 @@ window.customCards.push({
   description: "Frei konfigurierbares Energie-Dashboard (Batterie, Solar, Netz, Geräte, Verlauf)",
 });
 console.info(`%c OMNIBATTERY-DASHBOARD %c v${OB_VERSION}`, "background:#2e9e5b;color:#fff", "");
+
+// Selbstheilung gegen alten Browser-Cache (v. a. Firefox): prüft beim Laden, ob der Server eine neuere energy.js hat,
+// frischt dann den Cache auf und lädt die Seite einmal neu.
+(async () => {
+  try {
+    const src = performance.getEntriesByType("resource").map((x) => x.name).find((n) => /\/energy\.js(\?|$)/.test(n));
+    if (!src) return;
+    const txt = await (await fetch(src, { cache: "no-cache" })).text();
+    const v = /OB_VERSION = "([^"]+)"/.exec(txt)?.[1];
+    if (!v || v === OB_VERSION) return;
+    if (sessionStorage.getItem("ob_reloaded") === v) return;  // nur einmal pro Version, kein Reload-Loop
+    sessionStorage.setItem("ob_reloaded", v);
+    await fetch(src, { cache: "reload" });
+    location.reload();
+  } catch (e) { /* kein Netz/Storage: ignorieren */ }
+})();
