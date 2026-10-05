@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.20.2";
+const OB_VERSION = "0.20.3";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -460,14 +460,21 @@ class OmniBatteryDashboard extends HTMLElement {
       }
     }
     let rows;
+    const info = { total: 0, active: 0, excluded: 0, hidden: 0 };
     if (now) {
-      rows = Object.keys(this._hass?.states || {}).filter((id) => id.startsWith("sensor.") && !ex.has(id))
-        .map((id) => ({ id, v: this._pw(id) })).filter((r) => r.v !== null && r.v >= 1);
+      const all = Object.keys(this._hass?.states || {}).filter((id) => id.startsWith("sensor.")).map((id) => ({ id, v: this._pw(id) })).filter((r) => r.v !== null);
+      info.total = all.length;
+      const act = all.filter((r) => r.v >= 1); info.active = act.length;
+      rows = act.filter((r) => !ex.has(r.id)); info.excluded = act.length - rows.length;
     } else {
-      const st = this._stat?.[this._period] || {};
-      rows = this._topCandidates().filter((id) => !ex.has(id)).map((id) => ({ id, v: st[id] ?? null })).filter((r) => r.v !== null && r.v >= 0.01);
+      const st = this._stat?.[this._period] || {}, cand = this._topCandidates();
+      info.total = cand.length;
+      const act = cand.map((id) => ({ id, v: st[id] ?? null })).filter((r) => r.v !== null && r.v >= 0.01); info.active = act.length;
+      rows = act.filter((r) => !ex.has(r.id)); info.excluded = act.length - rows.length;
     }
     const hide = this._hideSet();
+    info.hidden = rows.filter((r) => hide.has(r.id)).length;
+    this._topInfo = info;
     rows = rows.map((r) => ({ ...r, hidden: hide.has(r.id) }));
     if (!this._showHidden) rows = rows.filter((r) => !r.hidden);
     return rows.sort((a, b) => b.v - a.v).slice(0, w.count || 10);
@@ -485,7 +492,7 @@ class OmniBatteryDashboard extends HTMLElement {
     return `<div class="tt"><button class="tf">${this._showHidden ? "🙈 Ausblenden" : `👁 Ausgeblendete anzeigen (${nHide})`}</button>${nHide ? `<button class="tr">Zurücksetzen</button>` : ""}</div>
       <div class="devs${rows.length > 12 ? " long" : ""}">${rows.map((r, i) => `
       <div class="dev${r.hidden ? " hid" : ""}"><div class="dl"><label title="${esc(r.id)}"><input type="checkbox" class="tk" data-id="${esc(r.id)}" ${r.hidden ? "checked" : ""}> ${i + 1}. ${esc(this._label(w, r.id))}</label><b>${esc(this._fmtW(r.v))}</b></div>
-      ${bar(r)}</div>`).join("") || '<div class="sub">Keine Verbraucher gefunden.</div>'}</div>
+      ${bar(r)}</div>`).join("") || `<div class="sub">${this._period !== "now" && this._statErr ? esc(this._statErr) : `Keine Verbraucher gefunden. ${this._topInfo ? `${this._topInfo.total} ${this._period === "now" ? "Leistungssensoren" : "Sensoren mit Statistik"} im System, ${this._topInfo.active} davon aktiv, ${this._topInfo.excluded} als Quelle/„Ignorieren“ ausgeblendet, ${this._topInfo.hidden} per Häkchen ausgeblendet.` : ""}`}</div>`}</div>
       ${rows.length ? `<div class="sub" style="margin-top:6px">Summe ${rows.filter((r) => !r.hidden).length} sichtbar: ${esc(this._fmtW(rows.filter((r) => !r.hidden).reduce((a, r) => a + r.v, 0)))}${w.include_sources ? "" : " · Quellen ausgeblendet"}</div>` : ""}
       <div class="sub" style="margin-top:4px">Häkchen = für den Moment ausblenden (nur in diesem Browser).</div>`;
   }
@@ -608,6 +615,7 @@ class OmniBatteryDashboard extends HTMLElement {
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities"]) this._use(w[k]).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.deduct).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.entities).forEach((i) => ids.add(i));
+    const essential = new Set(ids);
     if ((this._config.widgets || []).some((w) => w.type === "top")) this._topCandidates().forEach((i) => ids.add(i));
     for (const id of [...ids]) {  // Helfer durch ihre Komponenten ersetzen
       const hp = this._helper(id);
@@ -619,14 +627,21 @@ class OmniBatteryDashboard extends HTMLElement {
     const T = (v) => (typeof v === "number" ? v : Date.parse(v));
     try {
       const now = Date.now();
-      const res = await this._hass.callWS({
+      // in Blöcken abfragen (hunderte Sensoren auf einmal können Zeitüberschreitungen verursachen)
+      const all = [...ids], chunks = [];
+      for (let i = 0; i < all.length; i += 100) chunks.push(all.slice(i, i + 100));
+      const parts = await Promise.allSettled(chunks.map((c) => this._hass.callWS({
         type: "recorder/statistics_during_period", start_time: this._periodStart().toISOString(), end_time: new Date(now).toISOString(),
-        statistic_ids: [...ids], period: { day: "5minute", week: "hour", month: "day", year: "day" }[p], types: ["mean", "change"],
-      });
+        statistic_ids: c, period: { day: "5minute", week: "hour", month: "day", year: "day" }[p], types: ["mean", "change"],
+      })));
+      const res = Object.assign({}, ...parts.filter((x) => x.status === "fulfilled").map((x) => x.value || {}));
+      const bad = parts.find((x) => x.status === "rejected");
+      this._statErr = bad ? "Statistik-Fehler: " + (bad.reason?.message || JSON.stringify(bad.reason)) : "";
+      if (bad && parts.every((x) => x.status === "rejected")) throw bad.reason;
       const out = {}, missing = [];
       for (const id of ids) {
         const rows = res?.[id] || [], unit = this._st(id)?.attributes?.unit_of_measurement;
-        if (!rows.length) { out[id] = null; missing.push(id); continue; }
+        if (!rows.length) { out[id] = null; if (essential.has(id)) missing.push(id); continue; }
         if (this._isEnergy(id)) {
           const f = unit === "Wh" ? 0.001 : unit === "MWh" ? 1000 : 1;
           out[id] = rows.reduce((a, r) => a + (r.change || 0), 0) * f;
@@ -636,7 +651,7 @@ class OmniBatteryDashboard extends HTMLElement {
         }
       }
       this._stat[p] = out; this._statTs[p] = now; this._statMissing = missing;
-    } catch (e) { this._statMissing = []; this._ust = "Statistik-Fehler: " + (e?.message || JSON.stringify(e)); }
+    } catch (e) { this._statMissing = []; this._statErr = "Statistik-Fehler: " + (e?.message || JSON.stringify(e)); this._ust = this._statErr; }
     this._statBusy = false; this._loading = false; this._render();
     if (this._again) { this._again = false; this._loadStats(true); }
   }
