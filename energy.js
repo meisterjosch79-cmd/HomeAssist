@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.26.0";
+const OB_VERSION = "0.26.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -234,6 +234,8 @@ class OmniBatteryDashboard extends HTMLElement {
     if (this._isEnergy(id)) return null;
     const v = this._num(id); if (v === null) return null;
     const u = this._st(id).attributes.unit_of_measurement;
+    // nur echte Leistungseinheiten zählen; Sensoren mit anderer/falscher Einheit (z. B. „kWhh“, „%“) liefern keinen Leistungswert
+    if (!["W", "kW", "MW"].includes(u)) return null;
     return u === "kW" ? v * 1000 : u === "MW" ? v * 1e6 : v;
   }
   _fmtW(w) {
