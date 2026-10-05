@@ -66,6 +66,11 @@ Im Auswahldialog der Felder **Geräte** (Geräteverbrauch-Widget) und **Hausverb
 und lässt sich wie ein normaler Sensor in Listen anzeigen und zur Hausverbrauch-Summe addieren. Er funktioniert in allen Zeiträumen (W bzw. kWh).
 Er zählt selbst nicht als Verbraucher der Bilanz, damit keine Rückkopplung entsteht.
 
+### Zusammensetzung von „Nicht zugeordnet“ einstellen
+Im Karten-Editor gibt es die Sektion **„⚖️ Nicht zugeordnet — Zusammensetzung“**. Sie listet alle Sensoren, aus denen sich die nicht zugeordnete Energiemenge ergibt
+(Solar, Netz, Batterie und alle Verbraucher aus den Widgets), sortiert nach Leistung und mit Live-Wert. Pro Sensor wählst du **Addieren**, **Subtrahieren** oder **Ignorieren**
+(Standard: Solar/Netz addieren, Batterie-Entladen addieren bzw. Laden subtrahieren, Verbraucher subtrahieren). Die Einstellung gilt für den virtuellen Sensor und das Widget Energiebilanz.
+
 ### Andere Bereiche von „nicht zugeordnet“ abziehen
 Im Energiefluss-Widget gibt es das Feld **„Von ‚nicht zugeordnet‘ abziehen“**. Dort eingetragene Sensoren (z. B. ein zweites Haus, Wallbox, Werkstatt)
 zählen als Verbraucher der Energiebilanz. Sie verkleinern die nicht zugeordnete Energiemenge und den virtuellen Sensor, ohne in der Haus-Kachel selbst zu erscheinen.

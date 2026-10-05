@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.23.0";
+const OB_VERSION = "0.24.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -62,6 +62,33 @@ const VIRT = "virtual:unassigned", VIRT_NAME = "Nicht zugeordnete Energiemenge";
 // Helfer = vom Nutzer definierte virtuelle Sensoren (Summe/Differenz mehrerer Sensoren), Id "virtual:helper:<id>"
 const HELP_PREFIX = "virtual:helper:";
 const PAL = ["#03a9f4", "#e8833a", "#2e9e5b", "#9c27b0", "#e0a800", "#d81b60", "#00897b", "#6d4c41"];
+const toIds = (v) => (Array.isArray(v) ? v : v ? [v] : []);
+/** Sammelt Quellen (Solar/Netz/Batterie) und Verbraucher der Energiebilanz aus allen Widgets der Karte (jeder Sensor nur einmal) */
+function balanceCollect(ws, bw) {
+  const sgn = (wd, id) => (wd.signs?.[id] === -1 ? -1 : 1);
+  const roles = { solar: new Map(), grid: new Map(), battery: new Map() };
+  const seen = new Set();
+  const put = (role, wd, id, f) => { if (seen.has(id)) return; seen.add(id); roles[role].set(id, { f, wd }); };
+  for (const wd of ws.filter((x) => x.type === "flow")) {
+    const ig = wd.invert_grid ? -1 : 1, ib = wd.invert_battery ? -1 : 1;
+    toIds(wd.solar).forEach((id) => put("solar", wd, id, sgn(wd, id)));
+    toIds(wd.grid).forEach((id) => put("grid", wd, id, sgn(wd, id) * ig));
+    toIds(wd.grid_export).forEach((id) => put("grid", wd, id, -sgn(wd, id) * ig));
+    toIds(wd.battery).forEach((id) => put("battery", wd, id, sgn(wd, id) * ib));
+  }
+  for (const wd of ws.filter((x) => x.type === "battery")) {
+    const ib = wd.invert_power ? -1 : 1;
+    toIds(wd.power).forEach((id) => put("battery", wd, id, sgn(wd, id) * ib));
+  }
+  const skip = new Set([...seen, ...toIds(bw.exclude), VIRT]);
+  const cons = new Map();
+  const addC = (wd, id) => { if (!skip.has(id) && !cons.has(id)) cons.set(id, { f: sgn(wd, id), wd }); };
+  for (const wd of ws.filter((x) => x.type === "devices")) toIds(wd.entities).forEach((id) => addC(wd, id));
+  for (const wd of ws.filter((x) => x.type === "flow")) toIds(wd.deduct).forEach((id) => addC(wd, id));
+  toIds(bw.entities).forEach((id) => addC(bw, id));
+  return { roles, cons, seen };
+}
+const BAL_DEFAULT = { solar: "add", grid: "add", battery: "sub", consumer: "sub" };
 const PERIODS = { now: "Aktuell", day: "Tag", week: "Woche", month: "Monat", year: "Jahr" };
 const canon = (o) => JSON.stringify(o, (k, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -285,28 +312,18 @@ class OmniBatteryDashboard extends HTMLElement {
 
   /** Sammelt Quellen und Verbraucher automatisch aus den anderen Widgets dieser Karte (jeder Sensor nur einmal). */
   _balanceModel(w) {
-    const ws = this._config.widgets || [];
-    const sgn = (wd, id) => (wd.signs?.[id] === -1 ? -1 : 1);
-    const roles = { solar: new Map(), grid: new Map(), battery: new Map() };
-    const seen = new Set();
-    const put = (role, wd, id, f) => { if (seen.has(id)) return; seen.add(id); roles[role].set(id, { f, wd }); };
-    for (const wd of ws.filter((x) => x.type === "flow")) {
-      const ig = wd.invert_grid ? -1 : 1, ib = wd.invert_battery ? -1 : 1;
-      this._ids(wd.solar).forEach((id) => put("solar", wd, id, sgn(wd, id)));
-      this._ids(wd.grid).forEach((id) => put("grid", wd, id, sgn(wd, id) * ig));
-      this._ids(wd.grid_export).forEach((id) => put("grid", wd, id, -sgn(wd, id) * ig));
-      this._ids(wd.battery).forEach((id) => put("battery", wd, id, sgn(wd, id) * ib));
+    const { roles, cons, seen } = balanceCollect(this._config.widgets || [], w);
+    // Einstellungen „Nicht zugeordnet – Zusammensetzung“: ignorieren / addieren / subtrahieren je Sensor
+    const ov = this._config.unassigned_ov || {};
+    for (const role of Object.keys(roles)) for (const [id, it] of [...roles[role]]) {
+      const o = ov[id]; if (!o) continue;
+      if (o === "ignore") roles[role].delete(id);
+      else if ((role !== "battery" && o === "sub") || (role === "battery" && o === "add")) it.f = -it.f;
     }
-    for (const wd of ws.filter((x) => x.type === "battery")) {
-      const ib = wd.invert_power ? -1 : 1;
-      this._ids(wd.power).forEach((id) => put("battery", wd, id, sgn(wd, id) * ib));
+    for (const [id, it] of [...cons]) {
+      const o = ov[id]; if (!o) continue;
+      if (o === "ignore") cons.delete(id); else if (o === "add") it.f = -it.f;
     }
-    const skip = new Set([...seen, ...this._ids(w.exclude), VIRT]);
-    const cons = new Map();
-    const addC = (wd, id) => { if (!skip.has(id) && !cons.has(id)) cons.set(id, { f: sgn(wd, id), wd }); };
-    for (const wd of ws.filter((x) => x.type === "devices")) this._ids(wd.entities).forEach((id) => addC(wd, id));
-    for (const wd of ws.filter((x) => x.type === "flow")) this._ids(wd.deduct).forEach((id) => addC(wd, id));
-    this._ids(w.entities).forEach((id) => addC(w, id));
     const sum = (m) => {
       let t = null;
       for (const id of this._use([...m.keys()])) { const v = this._watts(id); if (v !== null) t = (t || 0) + v * m.get(id).f; }
@@ -1020,8 +1037,11 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     this._build();
   }
   set hass(h) {
+    const first = !this._hass;
     this._hass = h;
+    if (first && this._config && this.querySelector("#usec")) this._build();  // Namen/Werte erst mit hass verfügbar
     this.querySelectorAll("ha-form, ob-entity-picker").forEach((f) => (f.hass = h));
+    (this._unow || []).forEach(({ id, el }) => { el.textContent = this._valText(id); });
     (this._hnow || []).forEach(({ i, el }) => { const hp = this._config?.helpers?.[i]; if (hp) el.textContent = this._helperNow(hp); });
   }
 
@@ -1036,6 +1056,65 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   _helperList() { return (this._config.helpers || []).map((h) => ({ id: HELP_PREFIX + h.id, name: h.name || "Helfer" })); }
 
   /** Template-Definition für einen echten Home-Assistant-Helfer (Template-Sensor) aus den Komponenten */
+  /** Aktueller Wert eines Sensors als Text (Editor-Anzeige) */
+  _valText(id) {
+    if (String(id).startsWith("virtual:")) return "Helfer";
+    const st = this._hass?.states?.[id]; if (!st) return "n/a";
+    const v = parseFloat(st.state), u = st.attributes.unit_of_measurement || "";
+    return isNaN(v) ? st.state : `${v.toLocaleString("de-DE", { maximumFractionDigits: 2 })} ${u}`.trim();
+  }
+  _valW(id) {
+    const st = this._hass?.states?.[id], v = parseFloat(st?.state), u = st?.attributes?.unit_of_measurement;
+    return isNaN(v) || !["W", "kW", "MW"].includes(u) ? -1 : Math.abs(u === "kW" ? v * 1000 : u === "MW" ? v * 1e6 : v);
+  }
+
+  /** Sektion „Nicht zugeordnet – Zusammensetzung“: alle Sensoren, aus denen sich der Wert ergibt, mit Auswahl Ignorieren / Addieren / Subtrahieren */
+  _buildUnassigned() {
+    const host = this.querySelector("#usec"); if (!host) return;
+    this._unow = [];
+    const bw = (this._config.widgets || []).find((x) => x.type === "balance") || {};
+    const { roles, cons } = balanceCollect(this._config.widgets || [], bw);
+    const groups = [
+      ["☀️ Solar (Zufluss)", "solar", [...roles.solar.entries()]],
+      ["🏭 Netz (Zufluss)", "grid", [...roles.grid.entries()]],
+      ["🔋 Batterie (Entladen = Zufluss, Laden = Abfluss)", "battery", [...roles.battery.entries()]],
+      ["🏠 Verbraucher (werden abgezogen)", "consumer", [...cons.entries()]],
+    ];
+    const sec = document.createElement("details");
+    sec.open = !!this._uopen;
+    sec.addEventListener("toggle", () => { this._uopen = sec.open; });
+    sec.innerHTML = `<summary>⚖️ Nicht zugeordnet — Zusammensetzung</summary>
+      <div class="sub" style="margin:6px 0">„Nicht zugeordnet“ = Zufluss (Solar + Netz + Batterie-Entladung) − alle Verbraucher. Die Sensoren werden automatisch aus den Widgets übernommen. Hier legst du je Sensor fest, ob er <b>addiert</b>, <b>subtrahiert</b> oder <b>ignoriert</b> wird. Die Standardeinstellung steht jeweils dabei; sortiert nach der größten Leistung.</div>`;
+    const OPT = { add: "＋ Addieren", sub: "− Subtrahieren", ignore: "⊘ Ignorieren" };
+    if (!groups.some((g) => g[2].length)) {
+      const e = document.createElement("div"); e.className = "sub"; e.textContent = "Noch keine Quellen: Lege ein Energiefluss-Widget mit Solar / Netz / Batterie an.";
+      sec.appendChild(e);
+    }
+    for (const [title, role, items] of groups) {
+      if (!items.length) continue;
+      const g = document.createElement("div"); g.className = "ug";
+      g.innerHTML = `<div class="ugt">${esc(title)}</div>`;
+      items.sort((a, b) => this._valW(b[0]) - this._valW(a[0]));
+      for (const [id, it] of items) {
+        const def = BAL_DEFAULT[role], cur = this._config.unassigned_ov?.[id] || def;
+        const row = document.createElement("div"); row.className = "ur";
+        const nm = it.wd?.names?.[id] || this._hass?.states?.[id]?.attributes?.friendly_name || this._config.helpers?.find((h) => HELP_PREFIX + h.id === id)?.name || id;
+        row.innerHTML = `<span class="un" title="${esc(id)}">${esc(nm)}</span><b class="uv"></b>
+          <select>${["add", "sub", "ignore"].map((o) => `<option value="${o}" ${o === cur ? "selected" : ""}>${OPT[o]}${o === def ? " (Standard)" : ""}</option>`).join("")}</select>`;
+        const uv = row.querySelector(".uv"); uv.textContent = this._valText(id); this._unow.push({ id, el: uv });
+        row.querySelector("select").addEventListener("change", (e) => {
+          const ov = { ...(this._config.unassigned_ov || {}) };
+          if (e.target.value === def) delete ov[id]; else ov[id] = e.target.value;
+          if (Object.keys(ov).length) this._config.unassigned_ov = ov; else delete this._config.unassigned_ov;
+          this._emit();
+        });
+        g.appendChild(row);
+      }
+      sec.appendChild(g);
+    }
+    host.appendChild(sec);
+  }
+
   /** Editor für die Datenreihen eines Verlauf-Diagramms: beliebig viele Sensoren/Helfer mit Farbe und Darstellung (Linie / gestapelt) */
   _seriesEditor(w, i, upd) {
     const box = document.createElement("div");
@@ -1220,6 +1299,9 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   _build() {
     const ws = this._config.widgets || [];
     this.innerHTML = `<style>
+      .ob .ug{margin:10px 0;padding:8px 10px;background:var(--secondary-background-color);border-left:4px solid var(--primary-color);border-radius:8px}
+      .ob .ugt{font-weight:700;margin-bottom:6px}.ob .ur{display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--divider-color)}
+      .ob .ur .un{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ob .ur .uv{white-space:nowrap}
       .ob .sered{margin:14px 0}.ob .sh>b{font-size:1.15em;display:block}.ob .sh small{display:block}.ob .sh small{color:var(--secondary-text-color)}
       .ob .sr{border-left:4px solid var(--primary-color);padding-left:8px;margin:10px 0}.ob .sc{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:4px 0 8px}
       .ob .sc input.co{width:44px;height:30px;padding:0;border:none;background:none;vertical-align:middle}.ob .sc input.nm{flex:1 1 180px;width:auto}
@@ -1240,6 +1322,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       <div class="row"><select id="newtype">${Object.entries(WIDGET_TYPES).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join("")}</select>
         <button id="add">+ Widget hinzufügen</button></div>
       <div id="hsec"></div>
+      <div id="usec"></div>
       <div class="row" style="opacity:.8;font-size:.85em">Version ${OB_VERSION} <button id="reload">↻ Neu laden</button></div></div>`;
     this.querySelector("#reload").addEventListener("click", () => location.reload());
     this.querySelector("#title").addEventListener("input", (e) => { this._config.title = e.target.value; this._emit(); });
@@ -1261,6 +1344,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       this._emit(); this._build();
     });
     this._buildHelpers();
+    this._buildUnassigned();
     const list = this.querySelector("#list");
     ws.forEach((w, i) => {
       const d = document.createElement("details");
