@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.24.0";
+const OB_VERSION = "0.24.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -87,6 +87,18 @@ function balanceCollect(ws, bw) {
   for (const wd of ws.filter((x) => x.type === "flow")) toIds(wd.deduct).forEach((id) => addC(wd, id));
   toIds(bw.entities).forEach((id) => addC(bw, id));
   return { roles, cons, seen };
+}
+/** Wendet die Einstellungen „Ignorieren / Addieren / Subtrahieren“ auf die gesammelten Quellen und Verbraucher an */
+function balanceApply(roles, cons, ov) {
+  for (const role of Object.keys(roles)) for (const [id, it] of [...roles[role]]) {
+    const o = ov[id]; if (!o) continue;
+    if (o === "ignore") roles[role].delete(id);
+    else if ((role !== "battery" && o === "sub") || (role === "battery" && o === "add")) it.f = -it.f;
+  }
+  for (const [id, it] of [...cons]) {
+    const o = ov[id]; if (!o) continue;
+    if (o === "ignore") cons.delete(id); else if (o === "add") it.f = -it.f;
+  }
 }
 const BAL_DEFAULT = { solar: "add", grid: "add", battery: "sub", consumer: "sub" };
 const PERIODS = { now: "Aktuell", day: "Tag", week: "Woche", month: "Monat", year: "Jahr" };
@@ -314,16 +326,7 @@ class OmniBatteryDashboard extends HTMLElement {
   _balanceModel(w) {
     const { roles, cons, seen } = balanceCollect(this._config.widgets || [], w);
     // Einstellungen „Nicht zugeordnet – Zusammensetzung“: ignorieren / addieren / subtrahieren je Sensor
-    const ov = this._config.unassigned_ov || {};
-    for (const role of Object.keys(roles)) for (const [id, it] of [...roles[role]]) {
-      const o = ov[id]; if (!o) continue;
-      if (o === "ignore") roles[role].delete(id);
-      else if ((role !== "battery" && o === "sub") || (role === "battery" && o === "add")) it.f = -it.f;
-    }
-    for (const [id, it] of [...cons]) {
-      const o = ov[id]; if (!o) continue;
-      if (o === "ignore") cons.delete(id); else if (o === "add") it.f = -it.f;
-    }
+    balanceApply(roles, cons, this._config.unassigned_ov || {});
     const sum = (m) => {
       let t = null;
       for (const id of this._use([...m.keys()])) { const v = this._watts(id); if (v !== null) t = (t || 0) + v * m.get(id).f; }
@@ -1041,7 +1044,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     this._hass = h;
     if (first && this._config && this.querySelector("#usec")) this._build();  // Namen/Werte erst mit hass verfügbar
     this.querySelectorAll("ha-form, ob-entity-picker").forEach((f) => (f.hass = h));
-    (this._unow || []).forEach(({ id, el }) => { el.textContent = this._valText(id); });
+    if (this._unow) this._refreshUn();
     (this._hnow || []).forEach(({ i, el }) => { const hp = this._config?.helpers?.[i]; if (hp) el.textContent = this._helperNow(hp); });
   }
 
@@ -1063,9 +1066,44 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     const v = parseFloat(st.state), u = st.attributes.unit_of_measurement || "";
     return isNaN(v) ? st.state : `${v.toLocaleString("de-DE", { maximumFractionDigits: 2 })} ${u}`.trim();
   }
-  _valW(id) {
+  /** Leistung in W (nur W/kW/MW-Sensoren, Helfer aus ihren Bestandteilen); null wenn kein Leistungswert */
+  _pwr(id) {
+    if (String(id).startsWith(HELP_PREFIX)) {
+      const h = (this._config.helpers || []).find((x) => HELP_PREFIX + x.id === id); if (!h) return null;
+      let t = null;
+      for (const x of this._flatH(h)) { const v = this._pwr(x.id); if (v !== null) t = (t || 0) + v * x.sign; }
+      return t;
+    }
     const st = this._hass?.states?.[id], v = parseFloat(st?.state), u = st?.attributes?.unit_of_measurement;
-    return isNaN(v) || !["W", "kW", "MW"].includes(u) ? -1 : Math.abs(u === "kW" ? v * 1000 : u === "MW" ? v * 1e6 : v);
+    return isNaN(v) || !["W", "kW", "MW"].includes(u) ? null : u === "kW" ? v * 1000 : u === "MW" ? v * 1e6 : v;
+  }
+  _valW(id) { const v = this._pwr(id); return v === null ? -1 : Math.abs(v); }
+  _fW(w) { return w === null ? "–" : Math.abs(w) >= 1000 ? (w / 1000).toLocaleString("de-DE", { maximumFractionDigits: 2 }) + " kW" : Math.round(w).toLocaleString("de-DE") + " W"; }
+  /** Beiträge aller Sensoren zu „nicht zugeordnet“ (jetziger Wert, in W) */
+  _unCalc() {
+    const bw = (this._config.widgets || []).find((x) => x.type === "balance") || {};
+    const { roles, cons } = balanceCollect(this._config.widgets || [], bw);
+    balanceApply(roles, cons, this._config.unassigned_ov || {});
+    const contrib = new Map(); let supply = 0, used = 0;
+    for (const [role, m] of Object.entries(roles)) for (const [id, it] of m) {
+      const v = this._pwr(id); if (v === null) { contrib.set(id, null); continue; }
+      const c = (role === "battery" ? -1 : 1) * it.f * v; contrib.set(id, c); supply += c;
+    }
+    for (const [id, it] of cons) {
+      const v = this._pwr(id); if (v === null) { contrib.set(id, null); continue; }
+      const c = -it.f * v; contrib.set(id, c); used += -c;
+    }
+    return { contrib, supply, used, rest: supply - used };
+  }
+  _refreshUn() {
+    const c = this._unCalc();
+    (this._unow || []).forEach(({ id, el, cel }) => {
+      el.textContent = String(id).startsWith(HELP_PREFIX) ? this._fW(this._pwr(id)) : this._valText(id);
+      const v = c.contrib.get(id);
+      cel.textContent = v === undefined ? "ignoriert" : v === null ? "–" : (v > 0 ? "+" : "") + this._fW(v);
+      cel.style.opacity = v === undefined || v === null ? ".5" : "";
+    });
+    if (this._unsum) this._unsum.innerHTML = `Jetzt: Zufluss <b>${esc(this._fW(c.supply))}</b> − Verbraucher <b>${esc(this._fW(c.used))}</b> = nicht zugeordnet <b>${esc(this._fW(c.rest))}</b>`;
   }
 
   /** Sektion „Nicht zugeordnet – Zusammensetzung“: alle Sensoren, aus denen sich der Wert ergibt, mit Auswahl Ignorieren / Addieren / Subtrahieren */
@@ -1084,7 +1122,8 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     sec.open = !!this._uopen;
     sec.addEventListener("toggle", () => { this._uopen = sec.open; });
     sec.innerHTML = `<summary>⚖️ Nicht zugeordnet — Zusammensetzung</summary>
-      <div class="sub" style="margin:6px 0">„Nicht zugeordnet“ = Zufluss (Solar + Netz + Batterie-Entladung) − alle Verbraucher. Die Sensoren werden automatisch aus den Widgets übernommen. Hier legst du je Sensor fest, ob er <b>addiert</b>, <b>subtrahiert</b> oder <b>ignoriert</b> wird. Die Standardeinstellung steht jeweils dabei; sortiert nach der größten Leistung.</div>`;
+      <div class="sub" style="margin:6px 0">Spalte 2 = aktueller Messwert, Spalte 3 = <b>Beitrag zu „nicht zugeordnet“</b> (+ erhöht, − verringert). Helfer zeigen ihren berechneten Wert. „Nicht zugeordnet“ = Zufluss (Solar + Netz + Batterie-Entladung) − alle Verbraucher. Die Sensoren werden automatisch aus den Widgets übernommen. Hier legst du je Sensor fest, ob er <b>addiert</b>, <b>subtrahiert</b> oder <b>ignoriert</b> wird. Die Standardeinstellung steht jeweils dabei; sortiert nach der größten Leistung.</div>`;
+    const sum = document.createElement("div"); sum.className = "usum"; this._unsum = sum; sec.appendChild(sum);
     const OPT = { add: "＋ Addieren", sub: "− Subtrahieren", ignore: "⊘ Ignorieren" };
     if (!groups.some((g) => g[2].length)) {
       const e = document.createElement("div"); e.className = "sub"; e.textContent = "Noch keine Quellen: Lege ein Energiefluss-Widget mit Solar / Netz / Batterie an.";
@@ -1099,20 +1138,21 @@ class OmniBatteryDashboardEditor extends HTMLElement {
         const def = BAL_DEFAULT[role], cur = this._config.unassigned_ov?.[id] || def;
         const row = document.createElement("div"); row.className = "ur";
         const nm = it.wd?.names?.[id] || this._hass?.states?.[id]?.attributes?.friendly_name || this._config.helpers?.find((h) => HELP_PREFIX + h.id === id)?.name || id;
-        row.innerHTML = `<span class="un" title="${esc(id)}">${esc(nm)}</span><b class="uv"></b>
+        row.innerHTML = `<span class="un" title="${esc(id)}">${esc(nm)}</span><b class="uv"></b><b class="uc" title="Beitrag zu „nicht zugeordnet“"></b>
           <select>${["add", "sub", "ignore"].map((o) => `<option value="${o}" ${o === cur ? "selected" : ""}>${OPT[o]}${o === def ? " (Standard)" : ""}</option>`).join("")}</select>`;
-        const uv = row.querySelector(".uv"); uv.textContent = this._valText(id); this._unow.push({ id, el: uv });
+        this._unow.push({ id, el: row.querySelector(".uv"), cel: row.querySelector(".uc") });
         row.querySelector("select").addEventListener("change", (e) => {
           const ov = { ...(this._config.unassigned_ov || {}) };
           if (e.target.value === def) delete ov[id]; else ov[id] = e.target.value;
           if (Object.keys(ov).length) this._config.unassigned_ov = ov; else delete this._config.unassigned_ov;
-          this._emit();
+          this._emit(); this._refreshUn();
         });
         g.appendChild(row);
       }
       sec.appendChild(g);
     }
     host.appendChild(sec);
+    this._refreshUn();
   }
 
   /** Editor für die Datenreihen eines Verlauf-Diagramms: beliebig viele Sensoren/Helfer mit Farbe und Darstellung (Linie / gestapelt) */
@@ -1301,6 +1341,8 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     this.innerHTML = `<style>
       .ob .ug{margin:10px 0;padding:8px 10px;background:var(--secondary-background-color);border-left:4px solid var(--primary-color);border-radius:8px}
       .ob .ugt{font-weight:700;margin-bottom:6px}.ob .ur{display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--divider-color)}
+      .ob .usum{margin:8px 0;padding:8px 10px;border-radius:8px;background:var(--card-background-color);border:1px solid var(--divider-color)}
+      .ob .ur .uc{min-width:78px;text-align:right;white-space:nowrap}
       .ob .ur .un{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ob .ur .uv{white-space:nowrap}
       .ob .sered{margin:14px 0}.ob .sh>b{font-size:1.15em;display:block}.ob .sh small{display:block}.ob .sh small{color:var(--secondary-text-color)}
       .ob .sr{border-left:4px solid var(--primary-color);padding-left:8px;margin:10px 0}.ob .sc{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:4px 0 8px}
