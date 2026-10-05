@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.21.1";
+const OB_VERSION = "0.22.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -177,13 +177,18 @@ class OmniBatteryDashboard extends HTMLElement {
   _watts(id) {
     if (id === VIRT) return this._unassigned();
     const hp = this._helper(id);
-    if (hp) {  // Helfer: Komponenten addieren bzw. (bei „abziehen“) subtrahieren
-      let t = null;
-      for (const c of this._use((hp.entities || []).filter((x) => !String(x).startsWith("virtual:")))) {
-        const v = this._watts(c);
-        if (v !== null) t = (t || 0) + (hp.signs?.[c] === -1 ? -v : v);
-      }
-      return t;
+    if (hp) {  // Helfer: Komponenten (Sensoren und andere Helfer) addieren bzw. (bei „abziehen“) subtrahieren
+      const seen = (this._hseen ||= new Set());
+      if (seen.has(id)) return null;  // Zyklus: Helfer enthält sich selbst
+      seen.add(id);
+      try {
+        const comps = hp.entities || [];
+        let t = null;
+        const add = (c, v) => { if (v !== null) t = (t || 0) + (hp.signs?.[c] === -1 ? -v : v); };
+        for (const c of this._use(comps.filter((x) => !String(x).startsWith("virtual:")))) add(c, this._watts(c));
+        for (const c of comps.filter((x) => String(x).startsWith(HELP_PREFIX))) add(c, this._watts(c));
+        return t;
+      } finally { seen.delete(id); }
     }
     if (this._period !== "now") return this._stat?.[this._period]?.[id] ?? null;  // kWh aus Statistik
     if (this._isEnergy(id)) return null;
@@ -619,10 +624,14 @@ class OmniBatteryDashboard extends HTMLElement {
     for (const w of this._config.widgets || []) this._ids(w.entities).forEach((i) => ids.add(i));
     const essential = new Set(ids);
     if ((this._config.widgets || []).some((w) => w.type === "top")) this._topCandidates().forEach((i) => ids.add(i));
-    for (const id of [...ids]) {  // Helfer durch ihre Komponenten ersetzen
-      const hp = this._helper(id);
-      if (hp) { ids.delete(id); this._use(hp.entities || []).forEach((i) => ids.add(i)); }
-    }
+    const expand = (id, seen = new Set()) => {  // Helfer (auch verschachtelt) durch ihre Sensoren ersetzen
+      const hp = this._helper(id); if (!hp || seen.has(id)) return;
+      seen.add(id);
+      const comps = hp.entities || [];
+      this._use(comps.filter((x) => !String(x).startsWith("virtual:"))).forEach((i) => ids.add(i));
+      comps.filter((x) => String(x).startsWith(HELP_PREFIX)).forEach((x) => expand(x, seen));
+    };
+    for (const id of [...ids]) if (this._helper(id)) { ids.delete(id); expand(id); }
     ids.delete(VIRT);
     if (!ids.size) return;
     this._statBusy = true; this._loading = !this._stat[p]; if (this._loading) this._render();
@@ -788,7 +797,7 @@ class ObEntityPicker extends HTMLElement {
       .p [hidden]{display:none!important}.p .all{display:block;font-size:.85em;margin:0 0 6px}.p .all input{width:auto;margin:0 6px 0 0}
       .p .ph{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
       .p .cl{cursor:pointer;padding:2px 8px;font-size:1.2em;border-radius:6px}.p .cl:hover{background:var(--secondary-background-color)}
-      .p .sel{flex-wrap:wrap}.p .sg{flex:1 1 100%;font-size:.85em}.p .sg input{width:auto;margin-right:6px}
+      .p .sel{flex-wrap:wrap}.p .sg{flex:1 1 100%;font-size:.85em}.p .sg input{width:auto;margin-right:6px}.p .sg select{width:auto;margin:0 0 0 6px;padding:4px 8px}
       .p .sel input.nm{flex:1 1 100%;box-sizing:border-box;font-size:.85em}
       .p .it{display:flex;justify-content:space-between;gap:8px;padding:8px 6px;border-bottom:1px solid var(--divider-color);cursor:pointer}
       .p .it:hover{background:var(--secondary-background-color)}
@@ -817,6 +826,12 @@ class ObEntityPicker extends HTMLElement {
       this._signs ||= {};
       if (e.target.checked) this._signs[id] = -1; else delete this._signs[id];
       this.dispatchEvent(new CustomEvent("signed", { detail: { id, neg: e.target.checked } }));
+    });
+    this.querySelector(".head").addEventListener("change", (e) => {
+      const id = e.target.dataset?.op; if (!id) return;
+      this._signs ||= {};
+      if (e.target.value === "-1") this._signs[id] = -1; else delete this._signs[id];
+      this.dispatchEvent(new CustomEvent("signed", { detail: { id, neg: e.target.value === "-1" } }));
     });
     this.querySelector(".head").addEventListener("input", (e) => {
       const id = e.target.dataset?.nm; if (!id) return;
@@ -892,7 +907,8 @@ class ObEntityPicker extends HTMLElement {
     const rows = this._arr().map((id) => `<div class="sel"><div class="n">${esc(this._entName(id))} <small>${esc(this._devName(id))}</small></div>
       <span class="v" data-v="${esc(id)}">${esc(this._val(id))}</span><span class="x" data-rm="${esc(id)}" title="Entfernen">✕</span>
       ${this._opts.noNames ? "" : `<input class="nm" data-nm="${esc(id)}" placeholder="Anzeigename (optional)" value="${esc(this._names?.[id] || "")}">`}
-      ${this._opts.multiple ? `<label class="sg"><input type="checkbox" data-sg="${esc(id)}" ${this._signs?.[id] === -1 ? "checked" : ""}> Wert abziehen (−), z. B. separater Entlade-Sensor</label>` : ""}</div>`).join("");
+      ${this._opts.opSelect ? `<label class="sg">Rechnung: <select class="op" data-op="${esc(id)}"><option value="1">＋ dazurechnen</option><option value="-1" ${this._signs?.[id] === -1 ? "selected" : ""}>− abziehen</option></select></label>`
+        : this._opts.multiple ? `<label class="sg"><input type="checkbox" data-sg="${esc(id)}" ${this._signs?.[id] === -1 ? "checked" : ""}> Wert abziehen (−), z. B. separater Entlade-Sensor</label>` : ""}</div>`).join("");
     h.innerHTML = rows + (this._opts.multiple || !this._arr().length
       ? `<button data-open>${this._opts.multiple ? "+ Sensor hinzufügen" : "Sensor auswählen …"}</button>`
       : `<button data-open>Ändern …</button>`);
@@ -948,15 +964,39 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   _helperList() { return (this._config.helpers || []).map((h) => ({ id: HELP_PREFIX + h.id, name: h.name || "Helfer" })); }
 
   /** Template-Definition für einen echten Home-Assistant-Helfer (Template-Sensor) aus den Komponenten */
+  /** Helfer (auch verschachtelt) zu einer flachen Liste {id, sign} echter Sensoren auflösen */
+  _flatH(h, sign = 1, seen = new Set()) {
+    const out = [];
+    if (seen.has(h.id)) return out;
+    seen.add(h.id);
+    for (const c of h.entities || []) {
+      const sg = (h.signs?.[c] === -1 ? -1 : 1) * sign;
+      if (String(c).startsWith(HELP_PREFIX)) {
+        const sub = (this._config.helpers || []).find((x) => x.id === String(c).slice(HELP_PREFIX.length));
+        if (sub) out.push(...this._flatH(sub, sg, seen));
+      } else out.push({ id: c, sign: sg });
+    }
+    seen.delete(h.id);
+    return out;
+  }
+  /** Hängt Helfer `hid` (direkt oder indirekt) von Helfer `target` ab? (Zyklenschutz) */
+  _helperDepends(hid, target, seen = new Set()) {
+    if (hid === target) return true;
+    if (seen.has(hid)) return false;
+    seen.add(hid);
+    const h = (this._config.helpers || []).find((x) => x.id === hid);
+    return (h?.entities || []).some((c) => String(c).startsWith(HELP_PREFIX) && this._helperDepends(String(c).slice(HELP_PREFIX.length), target, seen));
+  }
+
   _helperTemplate(h) {
-    const st = this._hass?.states || {}, comps = h.entities || [];
-    if (!comps.length) return { error: "Keine Sensoren gewählt." };
+    const st = this._hass?.states || {}, flat = this._flatH(h);
+    if (!flat.length) return { error: "Keine Sensoren gewählt." };
     const kind = (id) => { const a = st[id]?.attributes || {}; return ["Wh", "kWh", "MWh"].includes(a.unit_of_measurement) || a.device_class === "energy" ? "energy" : "power"; };
-    const kinds = new Set(comps.map(kind));
+    const kinds = new Set(flat.map((x) => kind(x.id)));
     if (kinds.size > 1) return { error: "Der Helfer mischt Leistung (W) und Energie (kWh). Bitte getrennt anlegen." };
     const energy = kinds.has("energy");
     const factor = (id) => { const u = st[id]?.attributes?.unit_of_measurement; return energy ? (u === "Wh" ? 0.001 : u === "MWh" ? 1000 : 1) : (u === "kW" ? 1000 : u === "MW" ? 1e6 : 1); };
-    const terms = comps.map((id, k) => `${h.signs?.[id] === -1 ? "- " : k ? "+ " : ""}(states('${id}') | float(0) * ${factor(id)})`).join(" ");
+    const terms = flat.map((x, k) => `${x.sign === -1 ? "- " : k ? "+ " : ""}(states('${x.id}') | float(0) * ${factor(x.id)})`).join(" ");
     return { template: `{{ (${terms}) | round(${energy ? 3 : 1}) }}`, unit: energy ? "kWh" : "W", dc: energy ? "energy" : "power", sc: energy ? "total" : "measurement" };
   }
 
@@ -965,11 +1005,11 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     const t = this._helperTemplate(h); if (t.error) return "";
     const st = this._hass?.states || {};
     let sum = 0, any = false;
-    for (const id of h.entities || []) {
-      const a = st[id]?.attributes || {}, v = parseFloat(st[id]?.state);
+    for (const x of this._flatH(h)) {
+      const a = st[x.id]?.attributes || {}, v = parseFloat(st[x.id]?.state);
       if (isNaN(v)) continue;
       const u = a.unit_of_measurement, f = t.unit === "W" ? (u === "kW" ? 1000 : u === "MW" ? 1e6 : 1) : (u === "Wh" ? 0.001 : u === "MWh" ? 1000 : 1);
-      sum += v * f * (h.signs?.[id] === -1 ? -1 : 1); any = true;
+      sum += v * f * x.sign; any = true;
     }
     return any ? `Aktuell: ${Math.abs(sum) >= 100 ? sum.toFixed(0) : sum.toFixed(2)} ${t.unit}` : "";
   }
@@ -1022,7 +1062,8 @@ class OmniBatteryDashboardEditor extends HTMLElement {
         d.querySelector("summary").textContent = e.target.value || "Neuer Helfer";
       });
       const pk = document.createElement("ob-entity-picker");
-      pk.options = { label: "Sensoren — ohne Haken addieren, mit Haken abziehen", multiple: true, noNames: true, domain: "sensor", classes: ["power", "energy"], units: U_POWER };
+      pk.options = { label: "Bestandteile — Sensoren und andere Helfer, je „dazurechnen“ oder „abziehen“", multiple: true, noNames: true, opSelect: true, domain: "sensor", classes: ["power", "energy"], units: U_POWER,
+        getHelpers: () => this._helperList().filter((x) => !this._helperDepends(x.id.slice(HELP_PREFIX.length), h.id)) };
       pk.value = h.entities; pk.signs = h.signs; pk.hass = this._hass;
       pk.addEventListener("picked", (ev) => { ev.stopPropagation(); updH(i, { entities: ev.detail.value }); now.textContent = this._helperNow(this._config.helpers[i]); });
       pk.addEventListener("signed", (ev) => {

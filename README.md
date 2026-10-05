@@ -74,7 +74,7 @@ Im Bilanz-Widget werden sie unter „Verbraucher“ aufgeführt.
 ## Helfer anlegen (virtuelle Sensoren)
 Im Karten-Editor gibt es ganz unten die Sektion **„🧮 Helfer anlegen“**. Ein Helfer kombiniert mehrere Sensoren zu einem neuen Wert:
 
-- Sensoren auswählen; Sensoren **ohne Haken werden addiert**, mit **Haken „Wert abziehen“ subtrahiert**.
+- Bestandteile auswählen: echte Sensoren **und andere Helfer**. Bei jedem Bestandteil legst du fest, ob er **dazugerechnet (＋)** oder **abgezogen (−)** wird. Ein Helfer darf sich nicht selbst (auch nicht über andere Helfer) enthalten; solche Helfer werden in der Auswahl nicht angeboten.
 - Der Helfer steht danach in **allen Sensor-Listen** der Karte (Auswahlfenster, ganz oben unter „Helfer“) und verhält sich wie ein Sensor:
   in Energiefluss, Geräteliste, Bilanz, „abziehen“-Feld usw., auch bei Tag/Woche/Monat/Jahr (aus den Statistiken der Einzelsensoren).
 - Im Editor wird der aktuelle Wert des Helfers angezeigt.
