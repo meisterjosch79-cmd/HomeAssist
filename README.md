@@ -120,6 +120,11 @@ Defekte Zähler (z. B. Marstek mit 4.294.967.296 = 32-Bit-Überlauf) schreiben r
 Zählerschritte und Mittelwerte, die eine **Plausibilitätsgrenze** überschreiten (Standard 100 kW, im Editor einstellbar), und weist oben auf die betroffenen Sensoren hin.
 Die Daten in Home Assistant selbst bleiben unverändert; dauerhaft korrigieren lassen sie sich unter *Entwicklerwerkzeuge → Statistiken*.
 
+## Sensorliste exportieren
+Im Auswahlfenster für Sensoren (Schaltflächen **„⬇ Liste als CSV“** und **„⬇ als JSON“**) lässt sich die aktuell aufgelistete Sensorliste als Datei speichern (mit „Alle Sensoren anzeigen“ also alles).
+Pro Sensor stehen darin: Entitäts-ID, Name, Gerät, Hersteller, Modell, Integration, Geräte-/Zustandsklasse, Einheit, aktueller Zustand, ob er einen Wert liefert, Alter der letzten Aktualisierung und ob eine Langzeitstatistik besteht.
+Die Datei enthält nur Namen und aktuelle Werte deiner Sensoren, keine Zugangsdaten.
+
 ## Widgets
 | Typ | Zweck |
 |---|---|

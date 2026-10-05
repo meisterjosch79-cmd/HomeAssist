@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.25.0";
+const OB_VERSION = "0.26.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -893,7 +893,8 @@ class ObEntityPicker extends HTMLElement {
       .p button{cursor:pointer}.p .panel{border:1px solid var(--primary-color);border-radius:8px;padding:8px;margin-top:6px}
       .p .panel select,.p .panel input{width:100%;box-sizing:border-box;margin-bottom:6px}
       .p .list{max-height:300px;overflow:auto}
-      .p [hidden]{display:none!important}.p .all{display:block;font-size:.85em;margin:0 0 6px}.p .all input{width:auto;margin:0 6px 0 0}
+      .p [hidden]{display:none!important}.p .exp{margin:0 0 8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}.p .exp .exs{font-size:.85em;color:var(--secondary-text-color)}
+      .p .all{display:block;font-size:.85em;margin:0 0 6px}.p .all input{width:auto;margin:0 6px 0 0}
       .p .ph{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
       .p .cl{cursor:pointer;padding:2px 8px;font-size:1.2em;border-radius:6px}.p .cl:hover{background:var(--secondary-background-color)}
       .p .sel{flex-wrap:wrap}.p .sg{flex:1 1 100%;font-size:.85em}.p .sg input{width:auto;margin-right:6px}.p .sg select{width:auto;margin:0 0 0 6px;padding:4px 8px}
@@ -906,10 +907,13 @@ class ObEntityPicker extends HTMLElement {
       <div class="ph"><b>Sensor auswählen</b><span class="cl" title="Schließen">✕</span></div>
       <label class="all"><input type="checkbox" class="allcb"> Alle Sensoren anzeigen (Filter aus)</label>
       <label class="all mw">Nur Sensoren, die gerade mindestens <input type="number" class="minw" min="0" step="1" placeholder="z. B. 10" style="width:90px;display:inline-block;margin:0 4px"> W verbrauchen</label>
+      <div class="exp"><button class="ex-csv" title="Alle aktuell aufgelisteten Sensoren mit Beschreibung und Zustand">⬇ Liste als CSV</button> <button class="ex-json">⬇ als JSON</button> <span class="exs"></span></div>
       <select class="dev"></select><input class="q" placeholder="Durchsuchen …"><div class="list"></div></div></div>`;
     const [lt, lh] = String(this._opts?.label || "").split(" — ");
     this.querySelector(".lb").innerHTML = `<b>${esc(lt)}</b>${lh ? `<small>${esc(lh)}</small>` : ""}`;
     this.querySelector(".cl").addEventListener("click", () => this._toggle(false));
+    this.querySelector(".ex-csv").addEventListener("click", () => this._export("csv"));
+    this.querySelector(".ex-json").addEventListener("click", () => this._export("json"));
     this.querySelector(".minw").addEventListener("input", (e) => {
       const v = parseFloat(e.target.value); this._minW = isNaN(v) ? null : v;
       this._fillDevices(); this._renderList();
@@ -999,6 +1003,39 @@ class ObEntityPicker extends HTMLElement {
       if (o.classes && !o.classes.includes(a.device_class) && !(o.units && o.units.includes(a.unit_of_measurement))) return false;
       return true;
     });
+  }
+
+  /** Exportiert alle aktuell aufgelisteten Sensoren mit Beschreibung, Einheit, Zustand und Statistik-Info als Datei */
+  async _export(fmt) {
+    const out = this.querySelector(".exs"), h = this._hass;
+    out.textContent = "Erstelle Datei …";
+    let stat = {};
+    try { (await h.callWS({ type: "recorder/list_statistic_ids" })).forEach((x) => (stat[x.statistic_id] = x)); } catch (e) { /* Statistik optional */ }
+    const now = Date.now();
+    const ids = this._candidates().filter((id) => h.states[id]);
+    const rows = ids.map((id) => {
+      const st = h.states[id], a = st.attributes || {}, reg = h.entities?.[id] || {}, dev = reg.device_id ? h.devices?.[reg.device_id] : null;
+      const bad = ["unknown", "unavailable", "", "none"].includes(String(st.state).toLowerCase());
+      const sx = stat[id];
+      return {
+        entity_id: id, name: a.friendly_name || "", domain: id.split(".")[0], device: dev ? dev.name_by_user || dev.name || "" : "",
+        manufacturer: dev?.manufacturer || "", model: dev?.model || "", integration: reg.platform || "",
+        device_class: a.device_class || "", state_class: a.state_class || "", unit: a.unit_of_measurement || "",
+        state: st.state, numeric: !isNaN(parseFloat(st.state)), delivers_value: !bad,
+        last_updated: st.last_updated || "", age_seconds: st.last_updated ? Math.round((now - Date.parse(st.last_updated)) / 1000) : "",
+        statistics: sx ? [sx.has_mean ? "mean" : "", sx.has_sum ? "sum" : ""].filter(Boolean).join("+") : "",
+      };
+    });
+    let text, type, ext;
+    if (fmt === "json") { text = JSON.stringify({ exported: new Date().toISOString(), count: rows.length, sensors: rows }, null, 1); type = "application/json"; ext = "json"; }
+    else {
+      const cols = Object.keys(rows[0] || { entity_id: 1 }), q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      text = "\ufeff" + [cols.join(";"), ...rows.map((r) => cols.map((c) => q(r[c])).join(";"))].join("\r\n"); type = "text/csv;charset=utf-8"; ext = "csv";
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type })); a.download = `sensoren_${new Date().toISOString().slice(0, 10)}.${ext}`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    out.textContent = `${rows.length} Sensoren exportiert (${rows.filter((r) => r.delivers_value).length} mit Wert).`;
   }
 
   _renderHead() {
