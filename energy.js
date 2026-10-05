@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.20.3";
+const OB_VERSION = "0.20.4";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -424,8 +424,10 @@ class OmniBatteryDashboard extends HTMLElement {
     const en = [], pw = [];
     for (const x of list) {
       if (!x.statistic_id.startsWith("sensor.")) continue;
-      if (["Wh", "kWh", "MWh"].includes(x.unit_of_measurement)) en.push(x.statistic_id);
-      else if (["W", "kW", "MW"].includes(x.unit_of_measurement)) pw.push(x.statistic_id);
+      // Einheit: aktueller Zustand, sonst Felder der Statistik-Liste (Name je nach HA-Version verschieden)
+      const u = this._st(x.statistic_id)?.attributes?.unit_of_measurement ?? x.display_unit_of_measurement ?? x.statistics_unit_of_measurement ?? x.unit_of_measurement;
+      if (["Wh", "kWh", "MWh"].includes(u)) en.push(x.statistic_id);
+      else if (["W", "kW", "MW"].includes(u)) pw.push(x.statistic_id);
     }
     const devEn = new Set(en.map(dev).filter(Boolean));
     return [...en, ...pw.filter((id) => !dev(id) || !devEn.has(dev(id)))];
