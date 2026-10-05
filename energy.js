@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.22.0";
+const OB_VERSION = "0.23.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -54,13 +54,14 @@ const SCHEMAS = {
     { name: "max", selector: { number: { min: 0, mode: "box" } } }, WIDTH],
   balance: [NAME, MULTI("entities"), MULTI("exclude"), WIDTH],
   top: [NAME, { name: "count", selector: { number: { min: 1, max: 1000, mode: "box" } } }, { name: "refresh_s", selector: { number: { min: 1, max: 3600, mode: "box", unit_of_measurement: "s" } } }, MULTI("exclude"), BOOL("include_sources"), WIDTH],
-  history: [NAME, ENT("entity"), { name: "hours", selector: { number: { min: 1, max: 168, mode: "box" } } }, WIDTH],
+  history: [NAME, { name: "hours", selector: { number: { min: 1, max: 168, mode: "box" } } }, WIDTH],
 };
 
 // Virtueller Sensor: "Nicht zugeordnete Energiemenge" aus der Energiebilanz, nutzbar in Geräteliste und Hausverbrauch
 const VIRT = "virtual:unassigned", VIRT_NAME = "Nicht zugeordnete Energiemenge";
 // Helfer = vom Nutzer definierte virtuelle Sensoren (Summe/Differenz mehrerer Sensoren), Id "virtual:helper:<id>"
 const HELP_PREFIX = "virtual:helper:";
+const PAL = ["#03a9f4", "#e8833a", "#2e9e5b", "#9c27b0", "#e0a800", "#d81b60", "#00897b", "#6d4c41"];
 const PERIODS = { now: "Aktuell", day: "Tag", week: "Woche", month: "Monat", year: "Jahr" };
 const canon = (o) => JSON.stringify(o, (k, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -504,89 +505,158 @@ class OmniBatteryDashboard extends HTMLElement {
       <div class="sub" style="margin-top:4px">Häkchen = für den Moment ausblenden (nur in diesem Browser).</div>`;
   }
 
+  /** Datenreihen eines Verlauf-Widgets (Abwärtskompatibel: einzelnes `entity`) */
+  _series(w) {
+    const l = Array.isArray(w.series) && w.series.length ? w.series : w.entity ? [{ entity: w.entity }] : [];
+    return l.filter((x) => x && x.entity).map((x, k) => ({ entity: x.entity, name: x.name, color: x.color || PAL[k % PAL.length], hasColor: !!x.color, mode: x.mode === "stack" ? "stack" : "line", k }));
+  }
+  /** Helfer zu echten Sensoren mit Vorzeichen auflösen */
+  _hflat(id, sign = 1, seen = new Set()) {
+    const hp = this._helper(id);
+    if (!hp) return [{ id, sign }];
+    if (seen.has(id)) return [];
+    seen.add(id);
+    const out = [];
+    for (const c of hp.entities || []) out.push(...this._hflat(c, (hp.signs?.[c] === -1 ? -1 : 1) * sign, seen));
+    seen.delete(id);
+    return out;
+  }
+  _histIds(w) { return [...new Set(this._series(w).flatMap((s) => this._hflat(s.entity).map((x) => x.id)))].filter((i) => !String(i).startsWith("virtual:")); }
+  _histKey(wi, w) { return wi + "|" + (w.hours || 24) + "|" + this._histIds(w).sort().join(","); }
+  /** Zeitreihe [[t, wert]] einer Datenreihe (Leistung wird in W umgerechnet, Helfer aus ihren Sensoren zusammengesetzt) */
+  _seriesPts(w, wi, s) {
+    const data = this._hist[this._histKey(wi, w)]; if (!data) return [];
+    const comps = this._hflat(s.entity).filter((x) => data[x.id]);
+    const conv = (id) => { const u = this._st(id)?.attributes?.unit_of_measurement; return u === "kW" ? 1000 : u === "MW" ? 1e6 : 1; };
+    if (comps.length === 1) return data[comps[0].id].map((p) => [p[0], p[1] * conv(comps[0].id) * comps[0].sign]);
+    const times = [...new Set(comps.flatMap((c) => data[c.id].map((p) => p[0])))].sort((a, b) => a - b);
+    const idx = comps.map(() => -1), out = [];
+    for (const t of times) {
+      let sum = 0;
+      comps.forEach((c, j) => {
+        const arr = data[c.id];
+        while (idx[j] + 1 < arr.length && arr[idx[j] + 1][0] <= t) idx[j]++;
+        if (idx[j] >= 0) sum += arr[idx[j]][1] * conv(c.id) * c.sign;
+      });
+      out.push([t, sum]);
+    }
+    return out;
+  }
+  _seriesName(w, s) { return s.name || this._helper(s.entity)?.name || this._label(w, s.entity); }
+
   _history(w) {
-    const d = this._hist[w.entity + "|" + (w.hours || 24)];
-    if (!d || d.length < 2) return `<div class="sub">Lade Verlauf …</div>`;
-    const ys = d.map((p) => p[1]), unit = this._st(w.entity)?.attributes?.unit_of_measurement || "";
-    const f = (v) => v.toLocaleString("de-DE", { maximumFractionDigits: unit === "W" ? 0 : 2 }) + (unit ? " " + unit : "");
-    return `<div class="chart" data-wi="${(this._config.widgets || []).indexOf(w)}"></div>
-      <div class="sub">min ${esc(f(Math.min(...ys)))} · max ${esc(f(Math.max(...ys)))} · Maus über das Diagramm zeigt Zeit und Wert</div>`;
+    const ser = this._series(w), wi = (this._config.widgets || []).indexOf(w);
+    if (!ser.length) return `<div class="sub">Datenreihen im Editor hinzufügen.</div>`;
+    if (!this._hist[this._histKey(wi, w)]) return `<div class="sub">Lade Verlauf …</div>`;
+    return `<div class="chart" data-wi="${wi}"></div>
+      <div class="leg">${ser.map((s) => `<span><i class="sw" style="background:${s.color}"></i>${esc(this._seriesName(w, s))}${s.mode === "stack" ? " ▤" : ""}</span>`).join("")}</div>
+      <div class="sub">Maus über das Diagramm zeigt Zeit und Werte${ser.some((s) => s.mode === "stack") ? " · ▤ = gestapelt (addierend)" : ""}</div>`;
   }
 
-  /** Zeichnet die Diagramme mit Achsen, Nulllinie und Hover-Anzeige in der tatsächlichen Pixelbreite */
+  /** Zeichnet das Diagramm mit Achsen, Nulllinie, gestapelten Flächen, Linien und Hover-Anzeige in der tatsächlichen Pixelbreite */
   _drawCharts() {
     this.shadowRoot.querySelectorAll(".chart").forEach((el) => {
-      const w = (this._config.widgets || [])[+el.dataset.wi]; if (!w) return;
-      const d = this._hist[w.entity + "|" + (w.hours || 24)]; if (!d || d.length < 2) return;
-      const unit = this._st(w.entity)?.attributes?.unit_of_measurement || "";
-      const W = Math.max(240, el.clientWidth || 300), H = 190, L = 52, R = 8, T = 10, B = 26, PW = W - L - R, PH = H - T - B;
+      const wi = +el.dataset.wi, w = (this._config.widgets || [])[wi]; if (!w) return;
+      const ser = this._series(w).map((s) => ({ ...s, pts: this._seriesPts(w, wi, s) })).filter((s) => s.pts.length);
+      if (!ser.length) return;
+      const first = this._hflat(ser[0].entity)[0]?.id, ou = this._st(first)?.attributes?.unit_of_measurement || "";
+      const unit = ["W", "kW", "MW"].includes(ou) ? "W" : ou;
+      const W = Math.max(240, el.clientWidth || 300), H = 200, L = 52, R = 8, T = 10, B = 26, PW = W - L - R, PH = H - T - B;
       const t1 = Date.now(), t0 = t1 - (w.hours || 24) * 3600e3;
-      let ys = d.map((p) => p[1]);
-      let lo = Math.min(...ys, 0), hi = Math.max(...ys, 0);
+      // Wert zum Zeitpunkt t (Stufenfunktion)
+      const at = (pts, t) => { let a = 0, b = pts.length - 1; if (t < pts[0][0]) return pts[0][1]; while (b - a > 1) { const m = (a + b) >> 1; if (pts[m][0] <= t) a = m; else b = m; } return pts[b][0] <= t ? pts[b][1] : pts[a][1]; };
+      const stacked = ser.filter((s) => s.mode === "stack"), lines = ser.filter((s) => s.mode !== "stack");
+      // gemeinsame Zeitachse der gestapelten Reihen
+      const ts = [...new Set([t0, t1, ...stacked.flatMap((s) => s.pts.map((p) => p[0]).filter((t) => t >= t0 && t <= t1))])].sort((a, b) => a - b);
+      const layers = []; let cumP = ts.map(() => 0), cumN = ts.map(() => 0);
+      for (const s of stacked) {
+        const v = ts.map((t) => at(s.pts, t)), loP = cumP, loN = cumN;
+        cumP = cumP.map((c, i) => c + Math.max(v[i], 0)); cumN = cumN.map((c, i) => c + Math.min(v[i], 0));
+        layers.push({ s, loP, hiP: cumP, loN, hiN: cumN });
+      }
+      let lo = 0, hi = 0;
+      for (const v of cumN) if (v < lo) lo = v;
+      for (const v of cumP) if (v > hi) hi = v;
+      for (const s of lines) for (const p of s.pts) if (p[0] >= t0) { if (p[1] < lo) lo = p[1]; if (p[1] > hi) hi = p[1]; }
       if (lo === hi) hi = lo + 1;
-      // „schöne“ Achsenschritte
       const raw = (hi - lo) / 4, mag = 10 ** Math.floor(Math.log10(raw)), step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((x) => x >= raw);
       lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
       const kw = unit === "W" && Math.max(Math.abs(lo), Math.abs(hi)) >= 2000;
       const tick = (v) => (kw ? (v / 1000).toLocaleString("de-DE", { maximumFractionDigits: 2 }) + " kW" : v.toLocaleString("de-DE", { maximumFractionDigits: 2 }) + (unit ? " " + unit : ""));
       const X = (t) => L + ((t - t0) / (t1 - t0)) * PW, Y = (v) => T + (1 - (v - lo) / (hi - lo)) * PH, Y0 = Y(0);
-      const pts = d.filter((p) => p[0] >= t0 - 1).map((p) => [Math.max(p[0], t0), p[1]]);
-      if (!pts.length) pts.push([t0, d[0][1]]);
-      pts.push([t1, pts[pts.length - 1][1]]);
-      const line = pts.map((p) => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ");
-      const area = `${X(pts[0][0]).toFixed(1)},${Y0.toFixed(1)} ${line} ${X(t1).toFixed(1)},${Y0.toFixed(1)}`;
+      const f1 = (n) => n.toFixed(1);
+      // Stufenlinie: Wert bleibt bis zum nächsten Punkt
+      const stepPts = (xs, ys) => { const o = []; xs.forEach((x, i) => { if (i) o.push([x, ys[i - 1]]); o.push([x, ys[i]]); }); return o; };
+      const poly = (top, bot) => [...top, ...bot.slice().reverse()].map((p) => `${f1(X(p[0]))},${f1(Y(p[1]))}`).join(" ");
       let grid = "";
-      for (let v = lo; v <= hi + step / 1000; v += step) grid += `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--divider-color)" stroke-width="1"/><text x="${L - 6}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--secondary-text-color)">${esc(tick(v))}</text>`;
-      // Zeitachse: runde Uhrzeiten
+      for (let v = lo; v <= hi + step / 1000; v += step) grid += `<line x1="${L}" x2="${W - R}" y1="${f1(Y(v))}" y2="${f1(Y(v))}" stroke="var(--divider-color)"/><text x="${L - 6}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--secondary-text-color)">${esc(tick(v))}</text>`;
       const span = t1 - t0, steps = [3600e3, 2 * 3600e3, 3 * 3600e3, 6 * 3600e3, 12 * 3600e3, 24 * 3600e3, 2 * 24 * 3600e3, 7 * 24 * 3600e3], ti = steps.find((x) => span / x <= 7) || steps[steps.length - 1];
       const dt = new Date(t0); dt.setMinutes(0, 0, 0); if (ti >= 24 * 3600e3) dt.setHours(0);
       let xt = "", tt = dt.getTime(); while (tt < t0) tt += ti;
       for (; tt <= t1; tt += ti) {
-        const dd = new Date(tt), lab = ti >= 24 * 3600e3 ? dd.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) : dd.getHours() === 0 && span > 24 * 3600e3 ? dd.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) : dd.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-        xt += `<line x1="${X(tt).toFixed(1)}" x2="${X(tt).toFixed(1)}" y1="${T}" y2="${T + PH}" stroke="var(--divider-color)" stroke-width="1" stroke-dasharray="2 3"/><text x="${X(tt).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="11" fill="var(--secondary-text-color)">${lab}</text>`;
+        const dd = new Date(tt), lab = ti >= 24 * 3600e3 || (dd.getHours() === 0 && span > 24 * 3600e3) ? dd.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) : dd.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+        xt += `<line x1="${f1(X(tt))}" x2="${f1(X(tt))}" y1="${T}" y2="${T + PH}" stroke="var(--divider-color)" stroke-dasharray="2 3"/><text x="${f1(X(tt))}" y="${H - 8}" text-anchor="middle" font-size="11" fill="var(--secondary-text-color)">${lab}</text>`;
+      }
+      let body = "";
+      for (const l of layers) {
+        const c = l.s.color;
+        body += `<polygon points="${poly(stepPts(ts, l.hiP), stepPts(ts, l.loP))}" fill="${c}" opacity=".5"/><polygon points="${poly(stepPts(ts, l.hiN), stepPts(ts, l.loN))}" fill="${c}" opacity=".5"/>`;
+        body += `<polyline points="${stepPts(ts, l.hiP).map((p) => `${f1(X(p[0]))},${f1(Y(p[1]))}`).join(" ")}" fill="none" stroke="${c}" stroke-width="1.2"/>`;
+      }
+      const legacy = ser.length === 1 && !ser[0].hasColor && ser[0].mode !== "stack";
+      for (const s of lines) {
+        const pts = s.pts.filter((p) => p[0] > t0);
+        const xs = [t0, ...pts.map((p) => p[0]), t1], ys = [at(s.pts, t0), ...pts.map((p) => p[1]), pts.length ? pts[pts.length - 1][1] : at(s.pts, t0)];
+        const sp = stepPts(xs, ys), line = sp.map((p) => `${f1(X(p[0]))},${f1(Y(p[1]))}`).join(" ");
+        if (legacy) {
+          const area = `${f1(X(t0))},${f1(Y0)} ${line} ${f1(X(t1))},${f1(Y0)}`;
+          body += `<clipPath id="cu${wi}"><rect x="${L}" y="${T}" width="${PW}" height="${Math.max(0, Y0 - T).toFixed(1)}"/></clipPath><clipPath id="cd${wi}"><rect x="${L}" y="${f1(Y0)}" width="${PW}" height="${Math.max(0, T + PH - Y0).toFixed(1)}"/></clipPath>
+            <polygon points="${area}" fill="var(--primary-color)" opacity=".28" clip-path="url(#cu${wi})"/><polygon points="${area}" fill="#e8833a" opacity=".28" clip-path="url(#cd${wi})"/>
+            <polyline points="${line}" fill="none" stroke="var(--primary-color)" stroke-width="1.6" clip-path="url(#cu${wi})"/><polyline points="${line}" fill="none" stroke="#e8833a" stroke-width="1.6" clip-path="url(#cd${wi})"/>`;
+        } else body += `<polyline points="${line}" fill="none" stroke="${s.color}" stroke-width="1.8"/>`;
       }
       el.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="touch-action:pan-y;display:block">
-        <defs><clipPath id="cu${el.dataset.wi}"><rect x="${L}" y="${T}" width="${PW}" height="${Math.max(0, Y0 - T).toFixed(1)}"/></clipPath><clipPath id="cd${el.dataset.wi}"><rect x="${L}" y="${Y0.toFixed(1)}" width="${PW}" height="${Math.max(0, T + PH - Y0).toFixed(1)}"/></clipPath></defs>
-        ${grid}${xt}
-        <polygon points="${area}" fill="var(--primary-color)" opacity=".28" clip-path="url(#cu${el.dataset.wi})"/>
-        <polygon points="${area}" fill="#e8833a" opacity=".28" clip-path="url(#cd${el.dataset.wi})"/>
-        <polyline points="${line}" fill="none" stroke="var(--primary-color)" stroke-width="1.6" clip-path="url(#cu${el.dataset.wi})"/>
-        <polyline points="${line}" fill="none" stroke="#e8833a" stroke-width="1.6" clip-path="url(#cd${el.dataset.wi})"/>
-        <line x1="${L}" x2="${W - R}" y1="${Y0.toFixed(1)}" y2="${Y0.toFixed(1)}" stroke="var(--primary-text-color)" stroke-width="1.5"/>
-        <g class="cx" style="display:none"><line y1="${T}" y2="${T + PH}" stroke="var(--primary-text-color)" stroke-width="1" opacity=".6"/><circle r="4" fill="var(--card-background-color)" stroke="var(--primary-text-color)" stroke-width="2"/></g>
+        ${grid}${xt}${body}
+        <line x1="${L}" x2="${W - R}" y1="${f1(Y0)}" y2="${f1(Y0)}" stroke="var(--primary-text-color)" stroke-width="1.5"/>
+        <line class="cx" y1="${T}" y2="${T + PH}" stroke="var(--primary-text-color)" stroke-width="1" opacity=".6" style="display:none"/>
         <rect class="ov" x="${L}" y="${T}" width="${PW}" height="${PH}" fill="transparent"/></svg><div class="tip" style="display:none"></div>`;
       const svg = el.querySelector("svg"), cx = el.querySelector(".cx"), tip = el.querySelector(".tip");
       const val = (v) => v.toLocaleString("de-DE", { maximumFractionDigits: unit === "W" ? 0 : 2 }) + (unit ? " " + unit : "");
+      const leave = () => { cx.style.display = "none"; tip.style.display = "none"; };
       const move = (ev) => {
         const r = svg.getBoundingClientRect(), x = ev.clientX - r.left;
         if (x < L || x > W - R) { leave(); return; }
-        const t = t0 + ((x - L) / PW) * (t1 - t0);
-        let a = 0, b2 = pts.length - 1;
-        while (b2 - a > 1) { const m = (a + b2) >> 1; if (pts[m][0] <= t) a = m; else b2 = m; }
-        const pt = pts[a], px = X(t), py = Y(pt[1]);
-        cx.style.display = ""; cx.querySelector("line").setAttribute("x1", px); cx.querySelector("line").setAttribute("x2", px);
-        cx.querySelector("circle").setAttribute("cx", px); cx.querySelector("circle").setAttribute("cy", py);
+        const t = t0 + ((x - L) / PW) * (t1 - t0), px = X(t);
+        cx.style.display = ""; cx.setAttribute("x1", px); cx.setAttribute("x2", px);
         const when = new Date(t);
-        tip.innerHTML = `<b>${esc(val(pt[1]))}</b><br>${esc(when.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" }))} ${esc(when.toLocaleTimeString("de-DE"))}`;
+        let rows = ser.map((s) => `<div><i class="sw" style="background:${s.color}"></i>${esc(this._seriesName(w, s))}: <b>${esc(val(at(s.pts, t)))}</b></div>`).join("");
+        if (stacked.length > 1) rows += `<div style="border-top:1px solid var(--divider-color);margin-top:3px;padding-top:3px">Σ gestapelt: <b>${esc(val(stacked.reduce((a, s) => a + at(s.pts, t), 0)))}</b></div>`;
+        tip.innerHTML = `<div style="opacity:.7">${esc(when.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" }))} ${esc(when.toLocaleTimeString("de-DE"))}</div>${rows}`;
         tip.style.display = "";
-        const tw = tip.offsetWidth; tip.style.left = Math.min(W - tw - 2, Math.max(2, px + 10)) + "px"; tip.style.top = Math.max(0, py - 44) + "px";
+        const tw = tip.offsetWidth; tip.style.left = Math.min(W - tw - 2, Math.max(2, px + 10)) + "px"; tip.style.top = "8px";
       };
-      const leave = () => { cx.style.display = "none"; tip.style.display = "none"; };
       svg.addEventListener("pointermove", move); svg.addEventListener("pointerdown", move); svg.addEventListener("pointerleave", leave);
     });
   }
 
   async _loadHistory() {
-    for (const w of this._config?.widgets || []) {
-      if (w.type !== "history" || !w.entity) continue;
-      const key = w.entity + "|" + (w.hours || 24);
-      const last = this._histTs?.[key] || 0;
+    const ws = this._config?.widgets || [];
+    for (let wi = 0; wi < ws.length; wi++) {
+      const w = ws[wi]; if (w.type !== "history") continue;
+      const ids = this._histIds(w); if (!ids.length) continue;
+      const key = this._histKey(wi, w), last = this._histTs?.[key] || 0;
       if (Date.now() - last < 300000) continue;
       (this._histTs ||= {})[key] = Date.now();
       try {
         const start = new Date(Date.now() - (w.hours || 24) * 3600e3).toISOString();
-        const res = await this._hass.callApi("GET", `history/period/${start}?filter_entity_id=${w.entity}&minimal_response&no_attributes`);
-        this._hist[key] = (res?.[0] || []).map((s) => [new Date(s.last_changed || s.last_updated).getTime(), parseFloat(s.state)]).filter((p) => !isNaN(p[1]));
+        const res = await this._hass.callApi("GET", `history/period/${start}?filter_entity_id=${ids.join(",")}&minimal_response&no_attributes`);
+        const out = {};
+        (res || []).forEach((arr, j) => {
+          const id = arr?.[0]?.entity_id || ids[j];
+          out[id] = arr.map((x) => [new Date(x.last_changed || x.last_updated).getTime(), parseFloat(x.state)]).filter((p) => !isNaN(p[1]));
+        });
+        ids.forEach((id) => { out[id] ||= []; });
+        this._hist[key] = out;
         this._render();
       } catch (e) { /* ignore */ }
     }
@@ -736,6 +806,8 @@ class OmniBatteryDashboard extends HTMLElement {
       .dl span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.dl b{white-space:nowrap}
       .bar{height:6px;border-radius:3px;background:var(--divider-color);margin-top:3px}
       .bar i{display:block;height:100%;border-radius:3px;background:var(--primary-color)}
+      .leg{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.85em;margin:6px 0 2px}.leg span{display:inline-flex;align-items:center;gap:5px}
+      .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px}.leg .sw{margin-right:0}
       .chart{position:relative}.tip{position:absolute;pointer-events:none;background:var(--card-background-color);color:var(--primary-text-color);border:1px solid var(--divider-color);border-radius:8px;padding:5px 9px;font-size:.8em;line-height:1.35;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap;z-index:2}
       .tt{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px}
       .tt button{padding:4px 10px;border-radius:14px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer;font:inherit;font-size:.85em}
@@ -964,6 +1036,44 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   _helperList() { return (this._config.helpers || []).map((h) => ({ id: HELP_PREFIX + h.id, name: h.name || "Helfer" })); }
 
   /** Template-Definition für einen echten Home-Assistant-Helfer (Template-Sensor) aus den Komponenten */
+  /** Editor für die Datenreihen eines Verlauf-Diagramms: beliebig viele Sensoren/Helfer mit Farbe und Darstellung (Linie / gestapelt) */
+  _seriesEditor(w, i, upd) {
+    const box = document.createElement("div");
+    box.className = "sered";
+    const list = (Array.isArray(w.series) && w.series.length ? w.series : w.entity ? [{ entity: w.entity }] : []).map((x) => ({ ...x }));
+    const save = (rebuild) => {
+      upd({ series: list.map(({ entity, name, color, mode }) => ({ entity, ...(name ? { name } : {}), ...(color ? { color } : {}), ...(mode === "stack" ? { mode } : {}) })), entity: undefined });
+      if (rebuild) this._build();
+    };
+    box.innerHTML = `<div class="sh"><b>Datenreihen</b><small>Beliebig viele Sensoren oder Helfer. Darstellung je Reihe: <b>Linie</b> (einzeln) oder <b>gestapelt</b> (addierend, Flächen liegen übereinander).</small></div>`;
+    list.forEach((s, k) => {
+      const row = document.createElement("div");
+      row.className = "sr";
+      const pk = document.createElement("ob-entity-picker");
+      pk.options = { label: `Datenreihe ${k + 1} — Sensor oder Helfer`, multiple: false, noNames: true, domain: "sensor", getHelpers: () => this._helperList() };
+      pk.value = s.entity; pk.hass = this._hass;
+      pk.addEventListener("picked", (ev) => { ev.stopPropagation(); s.entity = ev.detail.value; save(false); });
+      const ctl = document.createElement("div");
+      ctl.className = "sc";
+      ctl.innerHTML = `<label>Farbe <input type="color" class="co" value="${esc(s.color || PAL[k % PAL.length])}"></label>
+        <label>Darstellung <select class="mo"><option value="line">Linie</option><option value="stack" ${s.mode === "stack" ? "selected" : ""}>Gestapelt (addierend)</option></select></label>
+        <input class="t nm" placeholder="Name in der Legende (optional)" value="${esc(s.name || "")}">
+        <button class="rm">🗑 Reihe entfernen</button>`;
+      ctl.querySelector(".co").addEventListener("input", (e) => { s.color = e.target.value; save(false); });
+      ctl.querySelector(".mo").addEventListener("change", (e) => { s.mode = e.target.value; save(false); });
+      ctl.querySelector(".nm").addEventListener("input", (e) => { s.name = e.target.value; save(false); });
+      ctl.querySelector(".rm").addEventListener("click", () => { list.splice(k, 1); save(true); });
+      row.append(pk, ctl);
+      box.appendChild(row);
+    });
+    const add = document.createElement("button");
+    add.textContent = "+ Datenreihe hinzufügen";
+    add.addEventListener("click", () => { list.push({ entity: "" }); (this._open ||= new Set()).add(i); upd({ series: list.map((x) => ({ ...x })), entity: undefined }); this._build(); });
+    const wrap = document.createElement("div"); wrap.className = "row"; wrap.appendChild(add);
+    box.appendChild(wrap);
+    return box;
+  }
+
   /** Helfer (auch verschachtelt) zu einer flachen Liste {id, sign} echter Sensoren auflösen */
   _flatH(h, sign = 1, seen = new Set()) {
     const out = [];
@@ -1110,6 +1220,9 @@ class OmniBatteryDashboardEditor extends HTMLElement {
   _build() {
     const ws = this._config.widgets || [];
     this.innerHTML = `<style>
+      .ob .sered{margin:14px 0}.ob .sh>b{font-size:1.15em;display:block}.ob .sh small{display:block}.ob .sh small{color:var(--secondary-text-color)}
+      .ob .sr{border-left:4px solid var(--primary-color);padding-left:8px;margin:10px 0}.ob .sc{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:4px 0 8px}
+      .ob .sc input.co{width:44px;height:30px;padding:0;border:none;background:none;vertical-align:middle}.ob .sc input.nm{flex:1 1 180px;width:auto}
       .ob details{border:1px solid var(--divider-color);border-radius:8px;margin:8px 0;padding:4px 8px}
       .ob summary{cursor:pointer;padding:8px 0;font-weight:500}
       .ob .row{display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;align-items:center}
@@ -1198,6 +1311,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
         pk.addEventListener("picked", (ev) => { ev.stopPropagation(); upd({ [f.name]: ev.detail.value }); });
         d.appendChild(pk);
       }
+      if (w.type === "history") d.appendChild(this._seriesEditor(w, i, upd));
       const row = document.createElement("div");
       row.className = "row";
       row.innerHTML = `<button data-a="up">↑</button><button data-a="down">↓</button><button data-a="del">🗑 Entfernen</button>`;

@@ -115,6 +115,6 @@ Die Daten in Home Assistant selbst bleiben unverändert; dauerhaft korrigieren l
 | `devices` | Verbrauchsliste mehrerer Geräte mit Balken |
 | `balance` | Energiebilanz (automatisch): Quellen aus den Energiefluss-/Batterie-Widgets, Verbraucher aus den Geräteverbrauch-Widgets, Rest = „Energiemenge nicht zugeordnet“ |
 | `top` | Top-Verbraucher (Standard 10) aus **allen** Sensoren des Systems, nicht nur den eingetragenen |
-| `history` | Verlaufsdiagramm einer Entität mit Achsen, Nulllinie (Bezug/Einspeisung bzw. Laden/Entladen farblich getrennt) und Hover-Anzeige mit Zeit und Wert |
+| `history` | Verlaufsdiagramm mit beliebig vielen Datenreihen (Sensoren oder Helfer), je Reihe Farbe und Darstellung **Linie** oder **gestapelt (addierend)**; Achsen, Nulllinie, Legende und Hover-Anzeige mit allen Werten |
 
 Siehe `example-dashboard.yaml`.
