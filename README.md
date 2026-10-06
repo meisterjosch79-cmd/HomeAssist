@@ -166,3 +166,6 @@ Unten in der Karte auf **✥ Layout** klicken. Danach erscheinen an jedem Widget
 - Gespeichert wird als `layout:` in der Kartenkonfiguration (Administrator, Dashboard im Storage-Modus). Sonst nur im lokalen Browser.
 - Die Zuordnung hängt an der Position der Widgets in der Konfiguration; wer Widgets im Editor löscht oder einfügt, sollte das Layout danach neu prüfen.
 - Ausblenden des Buttons: `show_layout: false` (oder im Editor).
+
+### Szenario „Speicher-Bilanz & Solar-Verwendung“
+Pro Speicher (Sonnen, Marstek Venus01/02) und in Summe: geladen, entladen, Ladestand; dazu eine Aufteilung der Solarenergie in *direkt verbraucht*, *über Speicher* und *eingespeist* (Näherung: Netzladung der Speicher ist nicht unterscheidbar).

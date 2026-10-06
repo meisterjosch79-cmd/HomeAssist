@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.29.0";
+const OB_VERSION = "0.30.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -14,6 +14,8 @@ const WIDGET_TYPES = {
   top: { label: "Top-Verbraucher (alle Sensoren im System)", icon: "🏆", short: "Top-Verbraucher" },
   history: { label: "Verlauf (Diagramm)", icon: "📈" , short: "Verlauf" },
   claude: { label: "Szenario by Claude (fertige Ansicht)", icon: "✨", short: "Szenario" },
+  storage: { label: "", icon: "🔋", short: "Speicher-Bilanz", hidden: true },
+  pvsplit: { label: "", icon: "☀️", short: "Solar: direkt / über Speicher", hidden: true },
   claudeinfo: { label: "", icon: "✨", short: "Szenario by Claude", hidden: true },
 };
 
@@ -76,6 +78,23 @@ const CLAUDE_SCENARIOS = (() => {
           { entity: hp("cl_hausstrom"), name: "Hausstrom Zähler", color: "#9c27b0" },
           { entity: hp("cl_k4"), name: "K4", color: "#e8833a" },
         ] }],
+      }),
+    },
+    k6_speicher: {
+      title: "Kapellenweg 6 · Speicher-Bilanz & Solar-Verwendung",
+      desc: "Pro Speicher (Sonnen, Marstek Venus01/Venus02) und in Summe: geladen, entladen, Ladestand. Darunter: Wie viel Solarstrom direkt verbraucht wurde, wie viel über die Speicher lief und wie viel eingespeist wurde. Umschalter oben (Aktuell/Tag/Woche/Monat/Jahr) wirkt auf alle Teile.",
+      requires: [I.prod, I.gout, I.bin, I.bout, I.m1in, I.m1out, I.m2in, I.m2out, I.soc, M1 + "state_of_charge", M2 + "state_of_charge"],
+      build: () => ({
+        widgets: [
+          { type: "storage", name: "Speicher: geladen / entladen / Ladestand", width: 4, units: [
+            { name: "Sonnenbatterie", soc: I.soc, capacity_kwh: 5.12, charge: [I.bin], discharge: [I.bout] },
+            { name: "Marstek Venus01", soc: M1 + "state_of_charge", capacity_kwh: 5.12, charge: [I.m1in, M1 + "total_grid_import"], discharge: [I.m1out, M1 + "total_grid_export"] },
+            { name: "Marstek Venus02", soc: M2 + "state_of_charge", capacity_kwh: 5.12, charge: [I.m2in, M2 + "total_grid_import"], discharge: [I.m2out, M2 + "total_grid_export"] },
+          ] },
+          { type: "pvsplit", name: "Solarstrom: direkt verbraucht · über Speicher · eingespeist", width: 4,
+            solar: [I.prod, I.pvE], grid_export: [I.gout, I.expE],
+            units: [{ charge: [I.bin] }, { charge: [I.m1in, M1 + "total_grid_import"] }, { charge: [I.m2in, M2 + "total_grid_import"] }] },
+        ],
       }),
     },
     k6_geraete: {
@@ -444,6 +463,39 @@ class OmniBatteryDashboard extends HTMLElement {
   }
 
   /** Kopf eines Szenarios by Claude: Titel, Beschreibung, fehlende Sensoren */
+  _storage(w) {
+    const units = (w.units || []).map((u) => {
+      const ch = this._sumW(u.charge, u), dis = this._sumW(u.discharge, u), soc = this._num(u.soc);
+      return { u, ch, dis, soc, cap: Number(u.capacity_kwh) || 0 };
+    });
+    const add = (k) => units.reduce((a, r) => (r[k] === null ? a : (a || 0) + r[k]), null);
+    const tch = add("ch"), tdis = add("dis");
+    const withCap = units.filter((r) => r.soc !== null && r.cap), withSoc = units.filter((r) => r.soc !== null);
+    const tsoc = withCap.length === withSoc.length && withCap.length ? withCap.reduce((a, r) => a + r.soc * r.cap, 0) / withCap.reduce((a, r) => a + r.cap, 0) : withSoc.length ? withSoc.reduce((a, r) => a + r.soc, 0) / withSoc.length : null;
+    const tcap = units.reduce((a, r) => a + r.cap, 0);
+    const bar = (v) => `<div style="height:8px;border-radius:4px;background:var(--divider-color);overflow:hidden;margin:4px 0"><div style="height:100%;width:${v === null ? 0 : Math.max(0, Math.min(100, v))}%;background:${v !== null && v < 20 ? "#c0392b" : "#2e9e5b"}"></div></div>`;
+    const now = this._period === "now";
+    const row = (name, r, bold) => `<div class="node" style="--c:${bold ? "var(--primary-color)" : "#2e9e5b"}"><div class="nh"><div class="nt"><div class="nl">${esc(name)}</div>
+      <div class="sub">${r.soc === null ? "Ladestand –" : "Ladestand " + Math.round(r.soc) + " %" + (r.cap ? " · " + (r.cap * r.soc / 100).toFixed(2) + " / " + r.cap.toFixed(2) + " kWh" : "")}</div></div></div>${bar(r.soc)}
+      <div class="parts"><div><span>${now ? "lädt gerade" : "geladen"}</span><b>${esc(this._fmtW(r.ch))}</b></div><div><span>${now ? "entlädt gerade" : "entladen"}</span><b>${esc(this._fmtW(r.dis))}</b></div></div></div>`;
+    return `<div class="flow">${units.map((r) => row(r.u.name || r.u.soc, r)).join("")}${units.length > 1 ? row("Summe aller Speicher", { soc: tsoc, ch: tch, dis: tdis, cap: tcap }, true) : ""}</div>
+      ${now ? "" : '<div class="sub" style="margin-top:6px">Zeiträume: Zähler (kWh) wo vorhanden, sonst aus der Leistung hochgerechnet (Sonnen).</div>'}`;
+  }
+  _pvsplit(w) {
+    const sol = this._sumW(w.solar, w), exp = this._sumW(w.grid_export, w);
+    let ch = this._sumW(w.battery, w);
+    if (w.units) ch = w.units.reduce((a, u) => { const v = this._sumW(u.charge, u); return v === null ? a : (a || 0) + v; }, null);
+    if (sol === null) return '<div class="sub">Keine Solarwerte verfügbar</div>';
+    const S = Math.max(0, sol), E = Math.min(S, Math.max(0, exp || 0)), avail = S - E;
+    const via = Math.min(Math.max(0, ch || 0), avail), direct = avail - via;
+    const pct = (v) => (S > 0 ? Math.round(v / S * 100) : 0);
+    const seg = (v, c) => `<div style="width:${S > 0 ? v / S * 100 : 0}%;background:${c}"></div>`;
+    const line = (c, label, v) => `<div class="brow"><span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c};margin-right:6px"></i>${label}</span><b>${esc(this._fmtW(v))} · ${pct(v)} %</b></div>`;
+    return `<div style="display:flex;height:16px;border-radius:8px;overflow:hidden;background:var(--divider-color);margin:4px 0 10px">${seg(direct, "#e0a800")}${seg(via, "#2e9e5b")}${seg(E, "#03a9f4")}</div>
+      <div class="brow"><span>☀️ Solar erzeugt</span><b>${esc(this._fmtW(S))}</b></div>
+      ${line("#e0a800", "direkt im Haus verbraucht", direct)}${line("#2e9e5b", "über Speicher (geladen)", via)}${line("#03a9f4", "eingespeist", E)}
+      <div class="sub" style="margin-top:6px">Eigenverbrauch (direkt + Speicher): ${pct(direct + via)} %. Näherung: Alles, was die Speicher laden, wird als Solarstrom gewertet (Netzladung kann nicht unterschieden werden).</div>`;
+  }
   _claudeinfo(w) {
     const miss = (w.requires || []).filter((id) => !this._st(id) || ["unavailable", "unknown"].includes(this._st(id).state));
     return `<div class="sub">${esc(w.desc || "")}</div>
@@ -929,6 +981,7 @@ class OmniBatteryDashboard extends HTMLElement {
     for (const w of this._config.widgets || [])
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities"]) this._use(w[k]).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.deduct).forEach((i) => ids.add(i));
+    for (const w of this._config.widgets || []) for (const u of w.units || []) for (const k of ["charge", "discharge"]) this._use(u[k]).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.entities).forEach((i) => ids.add(i));
     const essential = new Set(ids);
     if ((this._config.widgets || []).some((w) => w.type === "top")) this._topCandidates().forEach((i) => ids.add(i));
