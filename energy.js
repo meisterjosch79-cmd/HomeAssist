@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.34.1";
+const OB_VERSION = "0.34.2";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -46,7 +46,7 @@ const CLAUDE_SCENARIOS = (() => {
     H("cl_gesamt", "Verbrauch Gesamt (K6 + K4)", [hp("cl_pv"), hp("cl_netz"), hp("cl_bat")], { [hp("cl_bat")]: -1 }),
     H("cl_k6", "Verbrauch Kapellenweg 6 (Gesamt − K4)", [hp("cl_gesamt"), hp("cl_k4")], { [hp("cl_k4")]: -1 }),
   ];
-  const aut = { type: "autarky", name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], solar: [I.prod, I.pvE], grid: [I.gin, I.impE], grid_export: [I.gout, I.expE],
+  const aut = { type: "autarky", name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout],
     names: { [I.gin]: "Sonnen Netzbezug (Leistung)", [I.impE]: "Sonnen Netzbezug (Zähler)", [I.gout]: "Sonnen Einspeisung (Leistung)", [I.expE]: "Sonnen Einspeisung (Zähler)", [I.prod]: "Sonnen PV-Produktion (Leistung)", [I.pvE]: "PV-Produktion (Zähler)" } };
   const split = { type: "devices", name: "Verbrauch: Gesamt · Kapellenweg 6 · Kapellenweg 4", width: 2, names: { [hp("cl_gesamt")]: "Gesamt (K6 + K4)", [hp("cl_k6")]: "Kapellenweg 6", [hp("cl_k4")]: "Kapellenweg 4" }, entities: [hp("cl_gesamt"), hp("cl_k6"), hp("cl_k4")] };
   const batIds = [I.bin, I.bout, I.m1in, I.m1out, I.m2in, I.m2out], batSigns = { [I.bout]: -1, [I.m1out]: -1, [I.m2out]: -1 };
@@ -66,10 +66,10 @@ const CLAUDE_SCENARIOS = (() => {
       build: () => ({
         helpers, balance_ref: [hp("cl_hausstrom"), I.hsE, hp("cl_heizstrom"), I.hzE], balance_ref_names: { [hp("cl_hausstrom")]: "Hausstrom Zähler", [I.hsE]: "Hausstrom Zähler", [hp("cl_heizstrom")]: "Heizstromzähler", [I.hzE]: "Heizstromzähler" },
         widgets: [
-          { type: "flow", name: "Gesamt (Kapellenweg 6 + 4)", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin, I.impE], grid_export: [I.gout, I.expE], battery: batIds, signs: batSigns },
+          { type: "flow", name: "Gesamt (Kapellenweg 6 + 4)", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout], battery: batIds, signs: batSigns },
           { ...aut, width: 1 },
           { ...split, width: 1 },
-          { type: "flow", name: "Kapellenweg 6", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin, I.impE], grid_export: [I.gout, I.expE], battery: batIds, signs: batSigns,
+          { type: "flow", name: "Kapellenweg 6", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout], battery: batIds, signs: batSigns,
             home: [I.buro, I.buroE, I.heiz, I.heizE, I.klima, I.klimaE, I.tv, I.tvE, I.wp, I.wpE1, I.wpE2, VIRT], deduct: [hp("cl_k4"), I.k4E] },
           { type: "battery", name: "Speicher (Sonnen)", width: 1, soc: I.soc, power: [I.bin, I.bout], signs: { [I.bout]: -1 }, names },
           { type: "balance", name: "Bilanz Kapellenweg 6", width: 2 },
@@ -520,7 +520,7 @@ class OmniBatteryDashboard extends HTMLElement {
       <div class="brow"><span>⬆ Einspeisung</span><b>${esc(this._fmtW(exp))}</b></div>${this._parts(w, this._use(w.grid_export), true)}
       <div class="brow"><span>🏠 Verbrauch Gesamt</span><b>${esc(this._fmtW(cons))}</b></div>
       <div class="brow"><span>☀️ Eigenverbrauchsquote Solar</span><b>${pc(eig)}</b></div>
-      <div class="sub" style="margin-top:6px">Gilt für die Gesamtanlage (Kapellenweg 6 + 4). Die Netz-Zähler hängen vor beiden Häusern, daher gibt es keine getrennte Autarkie pro Haus. Netzladung der Speicher zählt als Netzbezug. Quelle: Sonnenbatterie-Netzzähler; die Einzelwerte stehen unter der jeweiligen Zeile (Zeiträume: Zähler, sonst aus der Leistung hochgerechnet).</div>`;
+      <div class="sub" style="margin-top:6px">Gilt für die Gesamtanlage (Kapellenweg 6 + 4). Die Netz-Zähler hängen vor beiden Häusern, daher gibt es keine getrennte Autarkie pro Haus. Netzladung der Speicher zählt als Netzbezug. Quelle: Sonnenbatterie „Netz import“ / „Netz export“; in Zeiträumen aus dem Leistungsverlauf (Statistik) hochgerechnet.</div>`;
   }
   _pvsplit(w) {
     const sol = this._sumW(w.solar, w), exp = this._sumW(w.grid_export, w);
