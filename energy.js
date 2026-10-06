@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.32.0";
+const OB_VERSION = "0.33.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -15,6 +15,7 @@ const WIDGET_TYPES = {
   history: { label: "Verlauf (Diagramm)", icon: "📈" , short: "Verlauf" },
   claude: { label: "Szenario by Claude (fertige Ansicht)", icon: "✨", short: "Szenario" },
   storage: { label: "", icon: "🔋", short: "Speicher-Bilanz", hidden: true },
+  autarky: { label: "", icon: "🛡️", short: "Netzbezug & Autarkie", hidden: true },
   pvsplit: { label: "", icon: "☀️", short: "Solar: direkt / über Speicher", hidden: true },
   claudeinfo: { label: "", icon: "✨", short: "Szenario by Claude", hidden: true },
 };
@@ -45,6 +46,7 @@ const CLAUDE_SCENARIOS = (() => {
     H("cl_gesamt", "Verbrauch Gesamt (K6 + K4)", [hp("cl_pv"), hp("cl_netz"), hp("cl_bat")], { [hp("cl_bat")]: -1 }),
     H("cl_k6", "Verbrauch Kapellenweg 6 (Gesamt − K4)", [hp("cl_gesamt"), hp("cl_k4")], { [hp("cl_k4")]: -1 }),
   ];
+  const aut = { type: "autarky", name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], solar: [I.prod, I.pvE], grid: [I.gin, I.impE], grid_export: [I.gout, I.expE] };
   const split = { type: "devices", name: "Verbrauch: Gesamt · Kapellenweg 6 · Kapellenweg 4", width: 2, names: { [hp("cl_gesamt")]: "Gesamt (K6 + K4)", [hp("cl_k6")]: "Kapellenweg 6", [hp("cl_k4")]: "Kapellenweg 4" }, entities: [hp("cl_gesamt"), hp("cl_k6"), hp("cl_k4")] };
   const batIds = [I.bin, I.bout, I.m1in, I.m1out, I.m2in, I.m2out], batSigns = { [I.bout]: -1, [I.m1out]: -1, [I.m2out]: -1 };
   const names = {
@@ -64,6 +66,7 @@ const CLAUDE_SCENARIOS = (() => {
         helpers, balance_ref: [hp("cl_hausstrom"), I.hsE, hp("cl_heizstrom"), I.hzE], balance_ref_names: { [hp("cl_hausstrom")]: "Hausstrom Zähler", [I.hsE]: "Hausstrom Zähler", [hp("cl_heizstrom")]: "Heizstromzähler", [I.hzE]: "Heizstromzähler" },
         widgets: [
           { type: "flow", name: "Gesamt (Kapellenweg 6 + 4)", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin, I.impE], grid_export: [I.gout, I.expE], battery: batIds, signs: batSigns },
+          { ...aut, width: 1 },
           { ...split, width: 1 },
           { type: "flow", name: "Kapellenweg 6", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin, I.impE], grid_export: [I.gout, I.expE], battery: batIds, signs: batSigns,
             home: [I.buro, I.buroE, I.heiz, I.heizE, I.klima, I.klimaE, I.tv, I.tvE, I.wp, I.wpE1, I.wpE2, VIRT], deduct: [hp("cl_k4"), I.k4E] },
@@ -82,6 +85,7 @@ const CLAUDE_SCENARIOS = (() => {
       build: () => ({
         helpers,
         widgets: [
+          { ...aut, width: 4 },
           { type: "history", name: "Gesamt: Solar, Netz, Speicher, Verbrauch (24 h)", hours: 24, width: 4, series: [
             { entity: I.prod, name: "PV-Produktion", color: "#e0a800" },
             { entity: hp("cl_netz"), name: "Netz (Bezug + / Einspeisung −)", color: "#03a9f4" },
@@ -103,8 +107,10 @@ const CLAUDE_SCENARIOS = (() => {
       desc: "Pro Speicher (Sonnen, Marstek Venus01/Venus02) und in Summe: geladen, entladen, Ladestand. Darunter: Wie viel Solarstrom direkt verbraucht wurde, wie viel über die Speicher lief und wie viel eingespeist wurde. Oben zusätzlich der Verbrauch getrennt nach Gesamt, Kapellenweg 6 und Kapellenweg 4 (Speicher und Solaranlage gehören zur Gesamtanlage und lassen sich nicht auf ein Haus aufteilen). Umschalter oben (Aktuell/Tag/Woche/Monat/Jahr) wirkt auf alle Teile.",
       requires: [I.prod, I.gout, I.bin, I.bout, I.m1in, I.m1out, I.m2in, I.m2out, I.soc, M1 + "state_of_charge", M2 + "state_of_charge"],
       build: () => ({
+        helpers,
         widgets: [
-          { ...split, width: 4 },
+          { ...aut, width: 2 },
+          { ...split, width: 2 },
           { type: "storage", name: "Gesamt · Speicher: geladen / entladen / Ladestand (versorgen beide Häuser)", width: 4, units: [
             { name: "Sonnenbatterie", soc: I.soc, capacity_kwh: 5.12, charge: [I.bin], discharge: [I.bout] },
             { name: "Marstek Venus01", soc: M1 + "state_of_charge", capacity_kwh: 5.12, charge: [I.m1in, M1 + "total_grid_import"], discharge: [I.m1out, M1 + "total_grid_export"] },
@@ -123,7 +129,8 @@ const CLAUDE_SCENARIOS = (() => {
       build: () => ({
         helpers,
         widgets: [
-          { ...split, width: 4 },
+          { ...aut, width: 2 },
+          { ...split, width: 2 },
           { type: "devices", name: "Geräte Kapellenweg 6", width: 2, names, entities: devices },
           { type: "devices", name: "Kapellenweg 4 (K4)", width: 2, names: { [hp("cl_k4")]: "K4 gesamt" }, entities: [hp("cl_k4"), ...I.k4] },
           { type: "top", name: "Top-Verbraucher (gesamtes System)", width: 4, count: 15, exclude_match: "forecast|geschätzt|marstek system|sonnenbatterie|hausstrom zähler|heizstromzähler|ct phase|ct total|helper|helfer|täglich" },
@@ -498,6 +505,21 @@ class OmniBatteryDashboard extends HTMLElement {
       <div class="parts"><div><span>${now ? "lädt gerade" : "geladen"}</span><b>${esc(this._fmtW(r.ch))}</b></div><div><span>${now ? "entlädt gerade" : "entladen"}</span><b>${esc(this._fmtW(r.dis))}</b></div></div></div>`;
     return `<div class="flow">${units.map((r) => row(r.u.name || r.u.soc, r)).join("")}${units.length > 1 ? row("Summe aller Speicher", { soc: tsoc, ch: tch, dis: tdis, cap: tcap }, true) : ""}</div>
       ${now ? "" : '<div class="sub" style="margin-top:6px">Zeiträume: Zähler (kWh) wo vorhanden, sonst aus der Leistung hochgerechnet (Sonnen).</div>'}`;
+  }
+  _autarky(w) {
+    const cons = this._sumW(w.home, w), imp = this._sumW(w.grid, w), exp = this._sumW(w.grid_export, w), sol = this._sumW(w.solar, w);
+    if (cons === null || imp === null) return '<div class="sub">Keine Werte verfügbar</div>';
+    const aut = cons > 0 ? Math.max(0, Math.min(100, (1 - imp / cons) * 100)) : null;
+    const eig = sol !== null && sol > 0 ? Math.max(0, Math.min(100, (1 - (exp || 0) / sol) * 100)) : null;
+    const col = aut === null ? "var(--secondary-text-color)" : aut >= 66 ? "#2e9e5b" : aut >= 33 ? "#e0a800" : "#c0392b";
+    const pc = (v) => (v === null ? "–" : Math.round(v) + " %");
+    return `<div class="val"><div class="big" style="color:${col}">${pc(aut)}</div><div class="sub">Autarkie (Anteil des Verbrauchs ohne Netzbezug)</div></div>
+      <div style="height:8px;border-radius:4px;background:var(--divider-color);overflow:hidden;margin:6px 0 10px"><div style="height:100%;width:${aut || 0}%;background:${col}"></div></div>
+      <div class="brow"><span>🏭 Netzbezug</span><b>${esc(this._fmtW(imp))}</b></div>
+      <div class="brow"><span>⬆ Einspeisung</span><b>${esc(this._fmtW(exp))}</b></div>
+      <div class="brow"><span>🏠 Verbrauch Gesamt</span><b>${esc(this._fmtW(cons))}</b></div>
+      <div class="brow"><span>☀️ Eigenverbrauchsquote Solar</span><b>${pc(eig)}</b></div>
+      <div class="sub" style="margin-top:6px">Gilt für die Gesamtanlage (Kapellenweg 6 + 4). Die Netz-Zähler hängen vor beiden Häusern, daher gibt es keine getrennte Autarkie pro Haus. Netzladung der Speicher zählt als Netzbezug.</div>`;
   }
   _pvsplit(w) {
     const sol = this._sumW(w.solar, w), exp = this._sumW(w.grid_export, w);
