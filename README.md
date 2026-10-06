@@ -158,3 +158,11 @@ Tipp: Ein Szenario am besten in einer **eigenen Karte** einsetzen, damit es sich
 | `history` | Verlaufsdiagramm mit beliebig vielen Datenreihen (Sensoren oder Helfer), je Reihe Farbe und Darstellung **Linie** oder **gestapelt (addierend)**; Achsen, Nulllinie, Legende und Hover-Anzeige mit allen Werten |
 
 Siehe `example-dashboard.yaml`.
+
+## Layout-Modus (Drag & Drop)
+
+Unten in der Karte auf **✥ Layout** klicken. Danach erscheinen an jedem Widget ein Griff **⠿** (zum Verschieben per Ziehen) und, bei breiten Ansichten (> 900 px), ein Griff **⇔** (Breite 1–4 Spalten). **Fertig** beendet den Modus, **Zurücksetzen** stellt die Reihenfolge der Konfiguration wieder her.
+
+- Gespeichert wird als `layout:` in der Kartenkonfiguration (Administrator, Dashboard im Storage-Modus). Sonst nur im lokalen Browser.
+- Die Zuordnung hängt an der Position der Widgets in der Konfiguration; wer Widgets im Editor löscht oder einfügt, sollte das Layout danach neu prüfen.
+- Ausblenden des Buttons: `show_layout: false` (oder im Editor).

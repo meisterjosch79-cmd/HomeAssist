@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.28.1";
+const OB_VERSION = "0.29.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -99,12 +99,12 @@ function expandClaude(cfg) {
   if (!(cfg.widgets || []).some((w) => w.type === "claude")) return cfg;
   const ws = [], helpers = [...(cfg.helpers || [])], extra = {};
   (cfg.widgets || []).forEach((w, ix) => {
-    if (w.type !== "claude") { ws.push({ ...w, _ix: ix }); return; }
+    if (w.type !== "claude") { ws.push({ ...w, _ix: ix, _k: "w" + ix }); return; }
     const sc = CLAUDE_SCENARIOS[w.scenario];
     if (!sc) { ws.push({ type: "claudeinfo", title: "Szenario by Claude", desc: "Dieses Szenario ist in dieser Version nicht enthalten. Bitte ⟳ Update ausführen oder ein anderes Szenario wählen.", width: 4, _cl: true }); return; }
     const b = sc.build();
-    ws.push({ type: "claudeinfo", title: w.name || sc.title, desc: sc.desc, requires: sc.requires, width: Math.min(4, Math.max(1, w.width || 4)), _cl: true });
-    b.widgets.forEach((x) => ws.push({ ...x, _cl: true }));
+    ws.push({ type: "claudeinfo", title: w.name || sc.title, desc: sc.desc, requires: sc.requires, width: Math.min(4, Math.max(1, w.width || 4)), _cl: true, _k: "c" + ix + ".i" });
+    b.widgets.forEach((x, n) => ws.push({ ...x, _cl: true, _k: "c" + ix + "." + n }));
     (b.helpers || []).forEach((h) => { if (!helpers.some((x) => x.id === h.id)) helpers.push(h); });
     ["balance_ref", "balance_ref_names", "unassigned_ov"].forEach((k) => { if (b[k] && !cfg[k] && !extra[k]) extra[k] = b[k]; });
   });
@@ -201,6 +201,7 @@ function balanceApply(roles, cons, ov) {
 }
 const BAL_DEFAULT = { solar: "add", grid: "add", battery: "sub", area: "sub", consumer: "sub" };
 const PERIODS = { now: "Aktuell", day: "Tag", week: "Woche", month: "Monat", year: "Jahr" };
+const hashStr = (str) => { let h = 0; for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 const canon = (o) => JSON.stringify(o, (k, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -220,6 +221,10 @@ class OmniBatteryDashboard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error("Ungültige Konfiguration");
     this._rawCanon = canon(config);
+    { const { layout: _l, ...base } = config; this._rawBase = canon(base);
+      let lay = config.layout;
+      if (!lay) { try { lay = JSON.parse(localStorage.getItem("ob_layout:" + hashStr(this._rawBase)) || "null"); } catch (e) { lay = null; } }
+      this._layout = lay || {}; }
     this._config = expandClaude({ title: "Energie", widgets: [], ...config });
     if (!this._period) {
       let st = null;
@@ -536,6 +541,81 @@ class OmniBatteryDashboard extends HTMLElement {
       <div class="rest" style="--c:${col}"><div><div class="nl">Energiemenge nicht zugeordnet</div>
         <div class="sub">${rest < -tol ? "Geräte übersteigen den Verbrauch des Hauses" : Math.abs(rest) <= tol ? "Alles zugeordnet ✓" : houseUse > 0 ? (100 - pct).toFixed(0) + " % des Hausverbrauchs: ungemessene Verbraucher, Standby, Verluste oder Messabweichung" : ""}</div></div>
         <div class="nv">${esc(this._fmtW(rest))}</div></div></div>`;
+  }
+
+  /** Layout-Modus: Widgets per Drag & Drop umsortieren (⠿) und die Breite ändern (⇔) */
+  _bindLayout() {
+    const root = this.shadowRoot;
+    root.getElementById("ldone")?.addEventListener("click", () => { this._layoutMode = false; this._render(); });
+    root.getElementById("lreset")?.addEventListener("click", () => { this._layout = {}; this._persistLayout(); this._render(); });
+    root.querySelectorAll(".hdl").forEach((h) => h.addEventListener("pointerdown", (ev) => this._dragStart(ev, h.closest(".w"))));
+    root.querySelectorAll(".rsz").forEach((h) => h.addEventListener("pointerdown", (ev) => this._resizeStart(ev, h.closest(".w"))));
+  }
+  _dragStart(ev, el) {
+    ev.preventDefault();
+    const root = this.shadowRoot, grid = root.querySelector(".grid"), d = (this._drag = { k: el.dataset.k, sx: ev.clientX, sy: ev.clientY, target: null, before: true });
+    el.classList.add("drag");
+    const clear = () => root.querySelectorAll(".w").forEach((x) => x.classList.remove("dbef", "daft"));
+    const move = (e) => {
+      el.style.transform = `translate(${e.clientX - d.sx}px, ${e.clientY - d.sy}px)`;
+      clear(); d.target = null;
+      const t = root.elementFromPoint(e.clientX, e.clientY)?.closest(".w");
+      if (t && t !== el) {
+        const r = t.getBoundingClientRect(), wide = r.width > grid.clientWidth * 0.8;
+        d.before = wide ? e.clientY < r.top + r.height / 2 : e.clientX < r.left + r.width / 2;
+        d.target = t.dataset.k; t.classList.add(d.before ? "dbef" : "daft");
+      }
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
+      if (d.target) {
+        const order = [...root.querySelectorAll(".w")].map((x) => x.dataset.k).filter((k) => k !== d.k);
+        const idx = order.indexOf(d.target);
+        order.splice(d.before ? idx : idx + 1, 0, d.k);
+        this._layout = { ...(this._layout || {}), order };
+        this._persistLayout();
+      }
+      this._drag = null; this._render();
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
+  }
+  _resizeStart(ev, el) {
+    ev.preventDefault();
+    const root = this.shadowRoot, grid = root.querySelector(".grid"), colW = (grid.getBoundingClientRect().width + 12) / 4, left = el.getBoundingClientRect().left, k = el.dataset.k;
+    this._drag = { k }; let n = +el.dataset.w;
+    const move = (e) => { n = Math.max(1, Math.min(4, Math.round((e.clientX - left) / colW))); el.style.gridColumn = `span ${n}`; el.dataset.w = n; };
+    const up = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
+      this._layout = { ...(this._layout || {}), widths: { ...(this._layout?.widths || {}), [k]: n } };
+      this._persistLayout(); this._drag = null; this._render();
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
+  }
+  /** Layout speichern: in der Dashboard-Konfiguration (Administrator, Storage-Modus), sonst nur in diesem Browser */
+  async _persistLayout() {
+    const lay = this._layout || {}, empty = !(lay.order || []).length && !Object.keys(lay.widths || {}).length;
+    const lsKey = "ob_layout:" + hashStr(this._rawBase || "");
+    try {
+      await this._patchDashboardCard((n) => { if (empty) delete n.layout; else n.layout = JSON.parse(JSON.stringify(lay)); });
+      try { localStorage.removeItem(lsKey); } catch (e) { /* ignore */ }
+      this._lst = empty ? "Layout zurückgesetzt" : "Layout gespeichert";
+    } catch (e) {
+      try { if (empty) localStorage.removeItem(lsKey); else localStorage.setItem(lsKey, JSON.stringify(lay)); } catch (e2) { /* ignore */ }
+      this._lst = "Nur in diesem Browser gespeichert (" + (e?.message || e?.error?.message || e?.code || "kein Zugriff auf die Dashboard-Konfiguration") + ")";
+    }
+    this._render();
+  }
+  /** Ändert diese Karte in der gespeicherten Dashboard-Konfiguration (Lovelace-API) */
+  async _patchDashboardCard(mutate) {
+    const seg = location.pathname.split("/")[1], url_path = seg === "lovelace" ? null : seg;
+    const cfg = await this._hass.callWS({ type: "lovelace/config", url_path });
+    let hit = null;
+    const walk = (n) => { if (hit || !n || typeof n !== "object") return; if (n.type === "custom:omnibattery-dashboard" && canon(n) === this._rawCanon) { hit = n; return; } Object.values(n).forEach(walk); };
+    walk(cfg);
+    if (!hit) throw new Error("Karte in der Dashboard-Konfiguration nicht gefunden");
+    mutate(hit);
+    await this._hass.callWS({ type: "lovelace/config/save", url_path, config: cfg });
+    this._rawCanon = canon(hit);
   }
 
   _hideSet() {
@@ -926,11 +1006,15 @@ class OmniBatteryDashboard extends HTMLElement {
 
   _render() {
     if (!this._config) return;
-    const body = (this._config.widgets || []).map((w) => {
+    if (this._drag) { this._pendingRender = true; return; }  // während des Ziehens nicht neu zeichnen
+    const lm = !!this._layoutMode, lay = this._layout || {}, ord = lay.order || [];
+    const items = (this._config.widgets || []).map((w, i) => ({ w, i, k: w._k || "w" + i }));
+    items.sort((a, b) => { const ia = ord.indexOf(a.k), ib = ord.indexOf(b.k); return (ia < 0 ? 1e6 + a.i : ia) - (ib < 0 ? 1e6 + b.i : ib); });
+    const body = items.map(({ w, k }) => {
       const fn = this["_" + w.type];
       const title = w.name || w.title || (w.entity ? this._name(w.entity) : WIDGET_TYPES[w.type]?.short || "");
-      const span = Math.min(4, Math.max(1, w.width || 1));
-      return `<section class="w" data-w="${span}" style="grid-column: span ${span}">
+      const span = Math.min(4, Math.max(1, lay.widths?.[k] ?? w.width ?? 1));
+      return `<section class="w${lm ? " lm" : ""}" data-k="${esc(k)}" data-w="${span}" style="grid-column: span ${span}">${lm ? `<span class="hdl" title="Verschieben">⠿</span><span class="rsz" title="Breite ändern">⇔</span>` : ""}
         <h3>${esc(title)}</h3>${fn ? fn.call(this, w) : `<div class="sub">Unbekannter Typ: ${esc(w.type)}</div>`}</section>`;
     }).join("");
     const seg = this._config.show_periods === false ? "" : `<div class="seg">${Object.entries(PERIODS).map(([k, v]) =>
@@ -949,6 +1033,15 @@ class OmniBatteryDashboard extends HTMLElement {
       .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
       @container (max-width:900px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.w[data-w="3"],.w[data-w="4"]{grid-column:span 2!important}}
       @container (max-width:560px){.grid{grid-template-columns:minmax(0,1fr)}.w{grid-column:span 1!important}}
+      .lbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 10px;padding:8px 12px;border:1px dashed var(--primary-color);border-radius:10px;font-size:.85em}
+      .lbar button,#lay{padding:4px 10px;border-radius:14px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer;font:inherit;font-size:.9em}
+      #lay.on{background:var(--primary-color);color:var(--text-primary-color,#fff)}
+      .w.lm{position:relative;outline:2px dashed var(--divider-color);outline-offset:-2px}
+      .hdl,.rsz{position:absolute;z-index:3;background:var(--card-background-color);border-radius:6px;padding:2px 8px;user-select:none;touch-action:none;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+      .hdl{top:6px;right:8px;cursor:grab;font-size:1.3em}.rsz{right:8px;bottom:8px;cursor:ew-resize}
+      @container (max-width:900px){.rsz{display:none}}
+      .w.drag{opacity:.75;z-index:10;box-shadow:0 8px 24px rgba(0,0,0,.35);pointer-events:none}
+      .w.dbef{box-shadow:inset 6px 0 0 var(--primary-color)}.w.daft{box-shadow:inset -6px 0 0 var(--primary-color)}
       .w{background:var(--secondary-background-color);border-radius:12px;padding:12px;min-width:0}
       h3{margin:0 0 8px;font-size:.95em;font-weight:500;color:var(--secondary-text-color)}
       .big{font-size:1.6em;font-weight:600}.sub{font-size:.85em;color:var(--secondary-text-color)}
@@ -986,10 +1079,13 @@ class OmniBatteryDashboard extends HTMLElement {
       .upd button{padding:4px 10px;border-radius:6px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer}
     </style>
     <ha-card><div class="wrap">${this._config.title ? `<div class="title">${esc(this._config.title)}</div>` : ""}${seg}
+      ${lm ? `<div class="lbar"><span>✥ Layout bearbeiten: Widgets am <b>⠿</b> ziehen, Breite am <b>⇔</b> ändern.</span><button id="ldone">Fertig</button><button id="lreset">Zurücksetzen</button><span class="sub">${esc(this._lst || "")}</span></div>` : ""}
       <div class="grid">${body || '<div class="sub">Noch keine Widgets – Karte bearbeiten und Widgets hinzufügen.</div>'}</div>
-      ${this._config.show_update === false ? "" : `<div class="upd"><span>OmniBattery v${OB_VERSION}</span><button id="upd">⟳ Update</button><span>${esc(this._ust || this._pollErr || "")}</span>${Number(this._config.poll_s) >= 5 ? `<span>⟳ Live-Abfrage alle ${Number(this._config.poll_s)} s</span>` : ""}</div>`}
+      ${this._config.show_update === false && this._config.show_layout === false ? "" : `<div class="upd">${this._config.show_update === false ? "" : `<span>OmniBattery v${OB_VERSION}</span><button id="upd">⟳ Update</button><span>${esc(this._ust || this._pollErr || "")}</span>${Number(this._config.poll_s) >= 5 ? `<span>⟳ Live-Abfrage alle ${Number(this._config.poll_s)} s</span>` : ""}`}${this._config.show_layout === false ? "" : `<button id="lay" class="${lm ? "on" : ""}">✥ Layout${lm ? " beenden" : ""}</button>`}</div>`}
       </div></ha-card>`;
     this.shadowRoot.getElementById("upd")?.addEventListener("click", () => this._update());
+    this.shadowRoot.getElementById("lay")?.addEventListener("click", () => { this._layoutMode = !this._layoutMode; this._lst = ""; this._render(); });
+    this._bindLayout();
     const R = (sel, ev, fn) => this.shadowRoot.querySelectorAll(sel).forEach((el) => el.addEventListener(ev, () => fn(el)));
     R(".tk", "change", (cb) => this._toggleHide(cb.dataset.id, cb.checked));
     R(".ta", "change", (sel) => { if (sel.value !== "") this._assign(sel.dataset.id, +sel.value); });
@@ -1576,6 +1672,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       <div class="row" style="margin:6px 0"><span>Live-Abfrage alle</span> <input class="t" id="ps" type="number" min="0" step="5" style="width:90px" value="${esc(this._config.poll_s || "")}" placeholder="0 = aus"> <span>Sekunden, nur solange das Dashboard offen ist</span></div>
       <div class="row" style="margin:6px 0"><span>Plausibilitätsgrenze für Zeiträume</span> <input class="t" id="mk" type="number" min="1" step="1" style="width:90px" value="${esc(this._config.max_kw || "")}" placeholder="100"> <span>kW – größere Sprünge in Zählern gelten als Messfehler</span></div>
       <div class="row" style="margin:0 0 6px"><span>Dienst dafür</span> <input class="t" id="psv" style="width:100%;max-width:340px" value="${esc(this._config.poll_service || "")}" placeholder="marstek_local_api.request_data_sync"></div>
+      <label><input type="checkbox" id="sl" ${this._config.show_layout === false ? "" : "checked"}> Layout-Bearbeitung (✥ Drag &amp; Drop) in der Karte anbieten</label><br>
       <label><input type="checkbox" id="su" ${this._config.show_update === false ? "" : "checked"}> Update-Button in der Karte anzeigen</label>
       <div id="list"></div>
       <div class="row"><select id="newtype">${Object.entries(WIDGET_TYPES).filter(([, v]) => !v.hidden).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join("")}</select>
@@ -1593,6 +1690,10 @@ class OmniBatteryDashboardEditor extends HTMLElement {
     this.querySelector("#ps").addEventListener("input", (e) => setNum("poll_s", e.target.value));
     this.querySelector("#mk").addEventListener("input", (e) => setNum("max_kw", e.target.value));
     this.querySelector("#psv").addEventListener("input", (e) => { if (e.target.value.trim()) this._config.poll_service = e.target.value.trim(); else delete this._config.poll_service; this._emit(); });
+    this.querySelector("#sl").addEventListener("change", (e) => {
+      if (e.target.checked) delete this._config.show_layout; else this._config.show_layout = false;
+      this._emit();
+    });
     this.querySelector("#su").addEventListener("change", (e) => {
       if (e.target.checked) delete this._config.show_update; else this._config.show_update = false;
       this._emit();
