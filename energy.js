@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.38.0";
+const OB_VERSION = "0.39.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -291,7 +291,7 @@ const CLAUDE_SCENARIOS = (() => {
     { name: "Klimaanlage", id: [I.klima, I.klimaE] }, { name: "Fernseher", id: [I.tv, I.tvE] },
     { name: "Smart Plug", id: ["sensor.smart_plug_2103098693615790845048e1e960b77a_power", "sensor.smart_plug_2103098693615790845048e1e960b77a_energy"] },
   ] };
-  const aut = { type: "autarky", ...det, name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], breakdown: [hp("cl_k6"), hp("cl_haus"), WB, hp("cl_wp"), hp("cl_k4")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout],
+  const aut = { type: "autarky", ...det, k4: [hp("cl_k4")], name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], breakdown: [hp("cl_k6"), hp("cl_haus"), WB, hp("cl_wp"), hp("cl_k4")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout],
     names: { [hp("cl_k6")]: "↳ Kapellenweg 6 gesamt", [hp("cl_haus")]: "     · Hausverbrauch", [WB]: "     · Wallbox", [hp("cl_wp")]: "     · Wärmepumpe", [hp("cl_k4")]: "↳ Kapellenweg 4 gesamt", [I.gin]: "Sonnen Netzbezug (Leistung)", [I.impE]: "Sonnen Netzbezug (Zähler)", [I.gout]: "Sonnen Einspeisung (Leistung)", [I.expE]: "Sonnen Einspeisung (Zähler)", [I.prod]: "Sonnen PV-Produktion (Leistung)", [I.pvE]: "PV-Produktion (Zähler)" } };
   const fin = { type: "finance", name: "Finanzübersicht", width: 2, home: [hp("cl_gesamt")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout], k4: [hp("cl_k4")], k6: [hp("cl_k6")], prices: { solar_use: 0.06, feed_in: 0.06, grid: 0.34, k4: 0.25 } };
   const split = { type: "areas", ...det, name: "Verbrauch nach Bereichen", width: 2, wallbox_upload: true,
@@ -299,7 +299,7 @@ const CLAUDE_SCENARIOS = (() => {
     groups: [
       { name: "Gesamt (Kapellenweg 6 + 4)", id: hp("cl_gesamt") },
       { name: "Kapellenweg 6 gesamt", id: hp("cl_k6"), toggle: "k6", parts: [{ name: "Hausverbrauch", id: hp("cl_haus") }, { name: "Wallbox", id: WB }, { name: "Wärmepumpe", id: hp("cl_wp") }] },
-      { name: "Kapellenweg 4 gesamt", id: hp("cl_k4"), parts: I.k4.map((id, n) => ({ name: "Phase L" + (n + 1), id })) },
+      { name: "Kapellenweg 4 gesamt", id: hp("cl_k4"), rate: "k4", parts: I.k4.map((id, n) => ({ name: "Phase L" + (n + 1), id })) },
     ] };
   const batIds = [I.bin, I.bout, I.m1in, I.m1out, I.m2in, I.m2out], batSigns = { [I.bout]: -1, [I.m1out]: -1, [I.m2out]: -1 };
   const names = {
@@ -732,7 +732,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const max = w.max || Math.max(1, ...rows.map((r) => Math.abs(r.v || 0)));
     rows.sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity));
     return `<div class="devs">${rows.map((r) => `
-      <div class="dev"><div class="dl"><span>${esc(this._label(w, r.id))}</span><b>${esc(!now || r.v !== null ? this._fmtW(r.v) : this._fmt(r.id))}</b></div>
+      <div class="dev"><div class="dl"><span>${esc(this._label(w, r.id))}</span><b>${esc(!now || r.v !== null ? this._fmtW(r.v) : this._fmt(r.id))}${this._amt(r.v, this._ids(this._config.widgets.find((x) => x.type === "finance")?.k4).includes(r.id))}</b></div>
       ${r.v !== null ? `<div class="bar"><i style="width:${Math.min(100, Math.abs(r.v) / max * 100)}%"></i></div>` : ""}</div>`).join("") || '<div class="sub">Keine Geräte gewählt</div>'}</div>`;
   }
 
@@ -775,7 +775,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const rows = (w.detail || []).map((it) => ({ it, v: this._sumW(it.id, w) })).filter((r) => r.v !== null).sort((a, b) => b.v - a.v);
     const shown = rows.filter((r) => zero || Math.abs(r.v) >= thr), hidden = rows.length - shown.length;
     const sum = rows.reduce((a, r) => a + r.v, 0), rest = total === null ? null : total - sum;
-    const line = (n, v, cls = "") => `<div class="brow ${cls}"><span>${esc(n)}</span><b>${esc(this._fmtW(v))}</b></div>`;
+    const line = (n, v, cls = "") => `<div class="brow ${cls}"><span>${esc(n)}</span><b>${esc(this._fmtW(v))}${this._amt(v)}</b></div>`;
     return `<div class="k6d" style="margin:4px 0 8px 12px;padding:6px 10px;border-left:3px solid var(--primary-color);background:var(--secondary-background-color,rgba(0,0,0,.04));border-radius:6px">
       <div class="sub" style="text-align:left;margin-bottom:4px">Verbraucher Kapellenweg 6, größte zuerst${now ? " (aktuelle Leistung)" : ""}</div>
       ${shown.map((r) => line(r.it.name, r.v)).join("") || '<div class="sub">Aktuell kein relevanter Verbrauch.</div>'}
@@ -788,37 +788,64 @@ class OmniBatteryDashboard extends HTMLElement {
     let ov = {}; try { ov = JSON.parse(localStorage.getItem("ob_prices") || "{}"); } catch (e) { ov = {}; }
     return { ...def, ...ov };
   }
-  _finance(w) {
+  /** Rechenkern der Finanzübersicht (Mengen, Beträge, Mischpreis) */
+  _finCalc(w) {
     const now = this._period === "now", pr = this._prices(w), k = now ? 1e-3 : 1;  // Aktuell: W → kW, € pro Stunde
     const g = (v) => { const x = this._sumW(v, w); return x === null ? null : x * k; };
     const S = g(w.solar), E = g(w.grid_export), G = g(w.grid), C = g(w.home), K4 = g(w.k4), K6 = g(w.k6);
-    if (G === null || C === null) return '<div class="sub">Keine Werte verfügbar</div>';
-    const used = Math.max(0, C - G), unit = now ? "kW" : "kWh", eur = (v) => (v === null || isNaN(v) ? "–" : v.toFixed(2).replace(".", ",") + " €" + (now ? "/h" : ""));
-    const qty = (v) => (v === null ? "–" : v.toFixed(now ? 2 : 2).replace(".", ",") + " " + unit);
-    const pc = (p) => (p * 100).toFixed(0) + " ct";
-    const e = Math.max(0, E || 0), k4 = Math.max(0, K4 || 0);
+    if (G === null || C === null) return null;
+    const used = Math.max(0, C - G), e = Math.max(0, E || 0), k4 = Math.max(0, K4 || 0);
     const cGrid = G * pr.grid, cSolar = used * pr.solar_use, rFeed = e * pr.feed_in, rK4 = k4 * pr.k4;
-    const cost = cGrid + cSolar, rev = rFeed + rK4, saldo = rev - cost, mix = C > 0 ? cost / C : 0;
-    const line = (label, q, p, v, sign) => `<div class="brow"><span>${esc(label)} <small class="sub">${qty(q)} × ${pc(p)}</small></span><b style="color:${sign < 0 ? "#c0392b" : "#2e9e5b"}">${sign < 0 ? "− " : "+ "}${esc(eur(v))}</b></div>`;
-    const sum = (label, v, big) => `<div class="brow" style="border-top:1px solid var(--divider-color);margin-top:2px;padding-top:3px"><span><b>${esc(label)}</b></span><b style="${big ? "font-size:1.2em;" : ""}color:${v < 0 ? "#c0392b" : "#2e9e5b"}">${esc((v > 0 ? "+ " : v < 0 ? "− " : "") + eur(Math.abs(v)))}</b></div>`;
+    const cost = cGrid + cSolar, rev = rFeed + rK4;
+    return { now, pr, S, E, G, C, K4, K6, used, e, k4, cGrid, cSolar, rFeed, rK4, cost, rev, mix: C > 0 ? cost / C : 0 };
+  }
+  /** Mischpreis (€/kWh) der Gesamtanlage für Beträge hinter Sensoren; null ohne Finanz-/Autarkie-Widget */
+  _mixInfo() {
+    if (this._mixC === undefined) {
+      const fw = (this._config?.widgets || []).find((x) => x.type === "finance") || (this._config?.widgets || []).find((x) => x.type === "autarky");
+      const c = fw ? this._finCalc(fw) : null;
+      this._mixC = c ? { mix: c.mix, k4: c.pr.k4, now: c.now, k4ids: this._ids(fw.k4) } : null;
+    }
+    return this._mixC;
+  }
+  /** Betrag hinter einem Verbrauchswert: Kosten zum Mischpreis (inkl. entgangenem Erlös) bzw. Erlös bei Kapellenweg 4 */
+  _amt(v, rev = false) {
+    const m = this._mixInfo(); if (m === null || v === null || v === undefined || isNaN(v)) return "";
+    const x = v * (m.now ? 1e-3 : 1) * (rev ? m.k4 : m.mix);
+    const t = Math.abs(x).toFixed(2).replace(".", ",") + " €" + (m.now ? "/h" : "");
+    return ` <small class="eur" title="${rev ? "Erlös: " + (m.k4 * 100).toFixed(0) + " ct/kWh" : "Kosten zum Mischpreis " + (m.mix * 100).toFixed(1).replace(".", ",") + " ct/kWh (Netzbezug + entgangener Erlös Sonnenstrom)"}" style="font-weight:normal;opacity:.8;color:${rev ? "#2e9e5b" : "inherit"}">· ${rev ? "+ " : ""}${t}</small>`;
+  }
+  _finance(w) {
+    const c = this._finCalc(w);
+    if (!c) return '<div class="sub">Keine Werte verfügbar</div>';
+    const { now, pr, G, C, K4, K6, used, e, k4, cGrid, cSolar, rFeed, rK4, mix } = c;
+    const unit = now ? "kW" : "kWh", eur = (v) => (v === null || isNaN(v) ? "–" : v.toFixed(2).replace(".", ",") + " €" + (now ? "/h" : ""));
+    const qty = (v) => (v === null ? "–" : v.toFixed(2).replace(".", ",") + " " + unit);
+    const pc = (p) => (p * 100).toFixed(0) + " ct";
+    const cash = rFeed + rK4 - cGrid, eco = cash - cSolar;
+    const line = (label, q, p, v, sign, hint = "") => `<div class="brow"${hint ? ` title="${esc(hint)}"` : ""}><span>${esc(label)} <small class="sub">${qty(q)} × ${pc(p)}</small></span><b style="color:${sign < 0 ? "#c0392b" : "#2e9e5b"}">${sign < 0 ? "− " : "+ "}${esc(eur(v))}</b></div>`;
+    const sum = (label, v, big) => `<div class="brow" style="border-top:1px solid var(--divider-color);margin-top:2px;padding-top:3px"><span><b>${esc(label)}</b></span><b style="${big ? "font-size:1.35em;" : ""}color:${v < 0 ? "#c0392b" : "#2e9e5b"}">${esc((v > 0 ? "+ " : v < 0 ? "− " : "") + eur(Math.abs(v)))}</b></div>`;
     const k6c = (K6 || 0) * mix, k4c = k4 * mix;
     const inp = (key, label) => `<label class="sub" style="display:flex;justify-content:space-between;gap:8px;align-items:center">${esc(label)}<span><input type="number" step="0.01" min="0" class="pi" data-k="${key}" value="${pr[key]}" style="width:70px"> €/kWh</span></label>`;
-    return `<div class="bsec">Kosten</div>
-      ${line("Netzbezug", G, pr.grid, cGrid, -1)}${line("Verbrauchter Sonnenstrom", used, pr.solar_use, cSolar, -1)}${sum("Summe Kosten", -cost)}
-      <div class="bsec" style="margin-top:8px">Erlöse</div>
-      ${line("Eingespeister Sonnenstrom", e, pr.feed_in, rFeed, 1)}${line("Strom an Kapellenweg 4", k4, pr.k4, rK4, 1)}${sum("Summe Erlöse", rev)}
-      <div class="bsec" style="margin-top:8px"><div class="brow"><span><b>Saldo (Erlöse − Kosten)</b></span><b style="font-size:1.35em;color:${saldo < 0 ? "#c0392b" : "#2e9e5b"}">${esc((saldo > 0 ? "+ " : saldo < 0 ? "− " : "") + eur(Math.abs(saldo)))}</b></div></div>
-      <div class="bsec" style="margin-top:8px">Aufteilung nach Haus <small class="sub">Mischpreis ${esc((mix * 100).toFixed(1).replace(".", ","))} ct/kWh (Kosten ÷ Verbrauch gesamt)</small></div>
+    return `<div class="bsec">Kosten (Geld, das fließt)</div>
+      ${line("Netzbezug", G, pr.grid, cGrid, -1)}
+      <div class="bsec" style="margin-top:8px">Erlöse (Geld, das fließt)</div>
+      ${line("Eingespeister Sonnenstrom", e, pr.feed_in, rFeed, 1)}${line("Strom an Kapellenweg 4", k4, pr.k4, rK4, 1)}
+      ${sum("Kassen-Saldo (Erlöse − Netzbezug)", cash, false)}
+      <div class="bsec" style="margin-top:8px">Entgangener Erlös</div>
+      ${line("Selbst verbrauchter Sonnenstrom", used, pr.solar_use, cSolar, -1, "Strom, der nicht eingespeist wurde und deshalb keine Einspeisevergütung bringt")}
+      <div class="bsec" style="margin-top:8px">${sum("Wirtschaftliches Ergebnis (nach entgangenem Erlös)", eco, true)}</div>
+      <div class="bsec" style="margin-top:8px">Aufteilung nach Haus <small class="sub">Mischpreis ${esc((mix * 100).toFixed(1).replace(".", ","))} ct/kWh = (Netzbezug + entgangener Erlös) ÷ Gesamtverbrauch</small></div>
       <div class="brow"><span>Kapellenweg 6 <small class="sub">${qty(K6)} Verbrauch</small></span><b>Kosten ${esc(eur(k6c))}</b></div>
       <div class="brow"><span>Kapellenweg 4 <small class="sub">${qty(k4)} × ${pc(pr.k4)} − Kosten ${esc(eur(k4c))}</small></span><b style="color:${rK4 - k4c < 0 ? "#c0392b" : "#2e9e5b"}">Ergebnis ${esc(eur(rK4 - k4c))}</b></div>
-      <details class="pd" ${this._piOpen ? "open" : ""} style="margin-top:8px"><summary class="sub" style="cursor:pointer">Preise anpassen</summary>${inp("grid", "Netzbezug (Kosten)")}${inp("solar_use", "Verbrauchter Sonnenstrom (Kosten)")}${inp("feed_in", "Eingespeister Sonnenstrom (Erlös)")}${inp("k4", "Strom an Kapellenweg 4 (Erlös)")}</details>
-      <div class="sub" style="margin-top:6px">Verbrauchter Sonnenstrom = Gesamtverbrauch − Netzbezug (inkl. über die Speicher). Der Saldo zeigt Erlöse minus Kosten der Gesamtanlage${now ? "; „Aktuell“ in € pro Stunde" : ""}.</div>`;
+      <details class="pd" ${this._piOpen ? "open" : ""} style="margin-top:8px"><summary class="sub" style="cursor:pointer">Preise anpassen</summary>${inp("grid", "Netzbezug (Kosten)")}${inp("solar_use", "Selbst verbrauchter Sonnenstrom (entgangener Erlös)")}${inp("feed_in", "Eingespeister Sonnenstrom (Erlös)")}${inp("k4", "Strom an Kapellenweg 4 (Erlös)")}</details>
+      <div class="sub" style="margin-top:6px">Selbst verbrauchter Sonnenstrom = Gesamtverbrauch − Netzbezug (inkl. über die Speicher). Die Beträge hinter den Sensoren in den anderen Übersichten sind Kosten zum Mischpreis${now ? "; „Aktuell“ in € pro Stunde" : ""}.</div>`;
   }
   _tg(k) { return !!(this._openTg ||= {})[k]; }
   _areas(w) {
     const now = this._period === "now";
-    const row = (name, id, cls, tg) => { const v = this._sumW(id, w); const wbOnly = this._ids(id).includes(WB) && now; return `<div class="brow ${cls}"${tg ? ` data-tg="${tg}" style="cursor:pointer" title="Klicken: Verbraucher-Liste ein-/ausklappen"` : ""}><span>${tg ? (this._tg(tg) ? "▾ " : "▸ ") : ""}${esc(name)}</span><b>${esc(wbOnly ? "nur in Zeiträumen" : this._fmtW(v))}</b></div>`; };
-    return (w.groups || []).map((g) => `<div class="bsec" style="margin-top:8px">${row(g.name, g.id, "", g.toggle)}</div>${g.toggle && this._tg(g.toggle) ? this._k6detail(w) : ""}${(g.parts || []).map((p) => row("↳ " + p.name, p.id, "sub")).join("")}`).join("")
+    const row = (name, id, cls, tg, rev) => { const v = this._sumW(id, w); const wbOnly = this._ids(id).includes(WB) && now; return `<div class="brow ${cls}"${tg ? ` data-tg="${tg}" style="cursor:pointer" title="Klicken: Verbraucher-Liste ein-/ausklappen"` : ""}><span>${tg ? (this._tg(tg) ? "▾ " : "▸ ") : ""}${esc(name)}</span><b>${esc(wbOnly ? "nur in Zeiträumen" : this._fmtW(v))}${wbOnly ? "" : this._amt(v, rev)}</b></div>`; };
+    return (w.groups || []).map((g) => `<div class="bsec" style="margin-top:8px">${row(g.name, g.id, "", g.toggle, g.rate === "k4")}</div>${g.toggle && this._tg(g.toggle) ? this._k6detail(w) : ""}${(g.parts || []).map((p) => row("↳ " + p.name, p.id, "sub", "", g.rate === "k4")).join("")}`).join("")
       + (w.note ? `<div class="sub" style="margin-top:6px">${esc(w.note)}</div>` : "")
       + (w.wallbox_upload ? (() => { const d = this._wbData(), last = d.length ? new Date(d[d.length - 1][1] * 1000).toLocaleDateString("de-DE") : "–";
         return `<div class="sub" style="margin-top:8px">Wallbox-Daten: ${d.length} Ladevorgänge, letzter bis ${esc(last)}</div>
@@ -827,7 +854,7 @@ class OmniBatteryDashboard extends HTMLElement {
   _breakdown(w) {
     const ids = this._ids(w.breakdown); if (!ids.length) return "";
     const one = (id) => { const tg = id === (w.detail_total || [])[0] && (w.detail || []).length ? "k6" : ""; const v = this._sumW(id, w);
-      return `<div${tg ? ` data-tg="k6" style="cursor:pointer" title="Klicken: Verbraucher-Liste ein-/ausklappen"` : ""}><span title="${esc(id)}">${tg ? (this._tg("k6") ? "▾ " : "▸ ") : ""}${esc(this._label(w, id))}</span><b>${esc(this._ids(id).includes(WB) && this._period === "now" ? "–" : this._fmtW(v))}</b></div>${tg && this._tg("k6") ? "</div>" + this._k6detail(w) + '<div class="parts">' : ""}`; };
+      return `<div${tg ? ` data-tg="k6" style="cursor:pointer" title="Klicken: Verbraucher-Liste ein-/ausklappen"` : ""}><span title="${esc(id)}">${tg ? (this._tg("k6") ? "▾ " : "▸ ") : ""}${esc(this._label(w, id))}</span><b>${esc(this._ids(id).includes(WB) && this._period === "now" ? "–" : this._fmtW(v))}${this._amt(v, this._ids(w.k4).includes(id))}</b></div>${tg && this._tg("k6") ? "</div>" + this._k6detail(w) + '<div class="parts">' : ""}`; };
     return `<div class="parts">${ids.map(one).join("")}</div>`;
   }
   _autarky(w) {
@@ -1153,7 +1180,7 @@ class OmniBatteryDashboard extends HTMLElement {
         : devs.length ? `<select class="ta" data-id="${esc(r.id)}"><option value="">＋ zu Gerät …</option>${opts}</select>` : ""}</div>`;
     return `<div class="tt"><button class="tf">${this._showHidden ? "🙈 Ausblenden" : `👁 Ausgeblendete anzeigen (${nHide})`}</button>${nHide ? `<button class="tr">Zurücksetzen</button>` : ""}</div>
       <div class="devs${rows.length > 12 ? " long" : ""}">${rows.map((r, i) => `
-      <div class="dev${r.hidden ? " hid" : ""}"><div class="dl"><label title="${esc(r.id)}"><input type="checkbox" class="tk" data-id="${esc(r.id)}" ${r.hidden ? "checked" : ""}> ${i + 1}. ${esc(this._label(w, r.id))}</label><b>${esc(this._fmtW(r.v))}</b></div>
+      <div class="dev${r.hidden ? " hid" : ""}"><div class="dl"><label title="${esc(r.id)}"><input type="checkbox" class="tk" data-id="${esc(r.id)}" ${r.hidden ? "checked" : ""}> ${i + 1}. ${esc(this._label(w, r.id))}</label><b>${esc(this._fmtW(r.v))}${this._amt(r.v)}</b></div>
       ${bar(r)}</div>`).join("") || `<div class="sub">${this._period !== "now" && this._statErr ? esc(this._statErr) : `Keine Verbraucher gefunden. ${this._topInfo ? `${this._topInfo.total} ${this._period === "now" ? "Leistungssensoren" : "Sensoren mit Statistik"} im System, ${this._topInfo.active} davon aktiv, ${this._topInfo.excluded} als Quelle/„Ignorieren“ ausgeblendet, ${this._topInfo.hidden} per Häkchen ausgeblendet.` : ""}`}</div>`}</div>
       ${rows.length ? `<div class="sub" style="margin-top:6px">Summe ${rows.filter((r) => !r.hidden).length} sichtbar: ${esc(this._fmtW(rows.filter((r) => !r.hidden).reduce((a, r) => a + r.v, 0)))}${w.include_sources ? "" : " · Quellen ausgeblendet"}</div>` : ""}
       <div class="sub" style="margin-top:4px">Häkchen = für den Moment ausblenden (nur in diesem Browser).</div>`;
@@ -1454,7 +1481,8 @@ class OmniBatteryDashboard extends HTMLElement {
 
   _render() {
     if (!this._config) return;
-    if (this._drag) { this._pendingRender = true; return; }  // während des Ziehens nicht neu zeichnen
+    if (this._drag) { this._pendingRender = true; return; }
+    this._mixC = undefined;  // während des Ziehens nicht neu zeichnen
     const lm = !!this._layoutMode, lay = this._layout || {}, ord = lay.order || [];
     const items = (this._config.widgets || []).map((w, i) => ({ w, i, k: w._k || "w" + i }));
     items.sort((a, b) => { const ia = ord.indexOf(a.k), ib = ord.indexOf(b.k); return (ia < 0 ? 1e6 + a.i : ia) - (ib < 0 ? 1e6 + b.i : ib); });
