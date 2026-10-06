@@ -1764,7 +1764,7 @@ class OmniBatteryDashboardEditor extends HTMLElement {
       d.open = !!this._open?.has(i);
       d.addEventListener("toggle", () => { (this._open ||= new Set())[d.open ? "add" : "delete"](i); });
       const t = WIDGET_TYPES[w.type] || { icon: "?", label: w.type };
-      d.innerHTML = `<summary>${t.icon} ${esc(w.name || t.label)}</summary>`;
+      d.innerHTML = `<summary>${t.icon} ${esc(w.name || (w.type === "claude" && CLAUDE_SCENARIOS[w.scenario]?.title) || t.label)}</summary>`;
       const fields = this._fields(w.type);
       const plain = fields.filter((f) => !f.isEnt);
       const upd = (patch) => {
@@ -1775,6 +1775,8 @@ class OmniBatteryDashboardEditor extends HTMLElement {
           return nw;
         });
         this._emit();
+        const sm = d.querySelector("summary"), nw = this._config.widgets[i];
+        if (sm && nw) sm.textContent = `${t.icon} ${nw.name || (nw.type === "claude" && CLAUDE_SCENARIOS[nw.scenario]?.title) || t.label}`;
       };
       const form = document.createElement("ha-form");
       form.hass = this._hass;
