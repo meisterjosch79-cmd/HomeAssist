@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.36.0";
+const OB_VERSION = "0.36.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -284,15 +284,14 @@ const CLAUDE_SCENARIOS = (() => {
     H("cl_wbwp", "Wallbox & Wärmepumpe", [WB, hp("cl_wp")]),
     H("cl_haus", "Kapellenweg 6 Hausverbrauch (ohne Wallbox & Wärmepumpe)", [hp("cl_k6"), hp("cl_wbwp")], { [hp("cl_wbwp")]: -1 }),
   ];
-  const aut = { type: "autarky", name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], breakdown: [hp("cl_haus"), hp("cl_wbwp"), hp("cl_k4")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout],
-    names: { [hp("cl_haus")]: "↳ Kapellenweg 6 Hausverbrauch", [hp("cl_wbwp")]: "↳ Wallbox & Wärmepumpe", [hp("cl_k4")]: "↳ Kapellenweg 4", [I.gin]: "Sonnen Netzbezug (Leistung)", [I.impE]: "Sonnen Netzbezug (Zähler)", [I.gout]: "Sonnen Einspeisung (Leistung)", [I.expE]: "Sonnen Einspeisung (Zähler)", [I.prod]: "Sonnen PV-Produktion (Leistung)", [I.pvE]: "PV-Produktion (Zähler)" } };
+  const aut = { type: "autarky", name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], breakdown: [hp("cl_k6"), hp("cl_haus"), WB, hp("cl_wp"), hp("cl_k4")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout],
+    names: { [hp("cl_k6")]: "↳ Kapellenweg 6 gesamt", [hp("cl_haus")]: "     · Hausverbrauch", [WB]: "     · Wallbox", [hp("cl_wp")]: "     · Wärmepumpe", [hp("cl_k4")]: "↳ Kapellenweg 4 gesamt", [I.gin]: "Sonnen Netzbezug (Leistung)", [I.impE]: "Sonnen Netzbezug (Zähler)", [I.gout]: "Sonnen Einspeisung (Leistung)", [I.expE]: "Sonnen Einspeisung (Zähler)", [I.prod]: "Sonnen PV-Produktion (Leistung)", [I.pvE]: "PV-Produktion (Zähler)" } };
   const split = { type: "areas", name: "Verbrauch nach Bereichen", width: 2, wallbox_upload: true,
     note: "Wallbox: aus den heruntergeladenen Ladevorgängen (nur in Zeiträumen, anteilig nach Zeit verteilt). Hausverbrauch = Kapellenweg 6 − Wallbox − Wärmepumpe.",
     groups: [
       { name: "Gesamt (Kapellenweg 6 + 4)", id: hp("cl_gesamt") },
-      { name: "Kapellenweg 6 · Hausverbrauch", id: hp("cl_haus"), parts: [{ name: "Büro Steckdosenleiste", id: [I.buro, I.buroE] }, { name: "Heizstab Warmwasser", id: [I.heiz, I.heizE] }, { name: "Klimaanlage", id: [I.klima, I.klimaE] }, { name: "Fernseher", id: [I.tv, I.tvE] }] },
-      { name: "Wallbox & Wärmepumpe", id: hp("cl_wbwp"), parts: [{ name: "Wallbox", id: WB }, { name: "Wärmepumpe", id: hp("cl_wp") }] },
-      { name: "Kapellenweg 4 (K4) aufgeschlüsselt", id: hp("cl_k4"), parts: I.k4.map((id, n) => ({ name: "Phase L" + (n + 1), id })) },
+      { name: "Kapellenweg 6 gesamt", id: hp("cl_k6"), parts: [{ name: "Hausverbrauch", id: hp("cl_haus") }, { name: "Wallbox", id: WB }, { name: "Wärmepumpe", id: hp("cl_wp") }] },
+      { name: "Kapellenweg 4 gesamt", id: hp("cl_k4"), parts: I.k4.map((id, n) => ({ name: "Phase L" + (n + 1), id })) },
     ] };
   const batIds = [I.bin, I.bout, I.m1in, I.m1out, I.m2in, I.m2out], batSigns = { [I.bout]: -1, [I.m1out]: -1, [I.m2out]: -1 };
   const names = {
