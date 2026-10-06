@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.37.0";
+const OB_VERSION = "0.38.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -17,6 +17,7 @@ const WIDGET_TYPES = {
   storage: { label: "", icon: "🔋", short: "Speicher-Bilanz", hidden: true },
   autarky: { label: "", icon: "🛡️", short: "Netzbezug & Autarkie", hidden: true },
   pvsplit: { label: "", icon: "☀️", short: "Solar: direkt / über Speicher", hidden: true },
+  finance: { label: "", icon: "💶", short: "Finanzübersicht", hidden: true },
   areas: { label: "", icon: "🏘️", short: "Bereiche", hidden: true },
   claudeinfo: { label: "", icon: "✨", short: "Szenario by Claude", hidden: true },
 };
@@ -292,6 +293,7 @@ const CLAUDE_SCENARIOS = (() => {
   ] };
   const aut = { type: "autarky", ...det, name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], breakdown: [hp("cl_k6"), hp("cl_haus"), WB, hp("cl_wp"), hp("cl_k4")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout],
     names: { [hp("cl_k6")]: "↳ Kapellenweg 6 gesamt", [hp("cl_haus")]: "     · Hausverbrauch", [WB]: "     · Wallbox", [hp("cl_wp")]: "     · Wärmepumpe", [hp("cl_k4")]: "↳ Kapellenweg 4 gesamt", [I.gin]: "Sonnen Netzbezug (Leistung)", [I.impE]: "Sonnen Netzbezug (Zähler)", [I.gout]: "Sonnen Einspeisung (Leistung)", [I.expE]: "Sonnen Einspeisung (Zähler)", [I.prod]: "Sonnen PV-Produktion (Leistung)", [I.pvE]: "PV-Produktion (Zähler)" } };
+  const fin = { type: "finance", name: "Finanzübersicht", width: 2, home: [hp("cl_gesamt")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout], k4: [hp("cl_k4")], k6: [hp("cl_k6")], prices: { solar_use: 0.06, feed_in: 0.06, grid: 0.34, k4: 0.25 } };
   const split = { type: "areas", ...det, name: "Verbrauch nach Bereichen", width: 2, wallbox_upload: true,
     note: "Wallbox: aus den heruntergeladenen Ladevorgängen (nur in Zeiträumen, anteilig nach Zeit verteilt). Hausverbrauch = Kapellenweg 6 − Wallbox − Wärmepumpe.",
     groups: [
@@ -318,7 +320,8 @@ const CLAUDE_SCENARIOS = (() => {
         widgets: [
           { type: "flow", name: "Gesamt (Kapellenweg 6 + 4)", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout], battery: batIds, signs: batSigns },
           { ...aut, width: 1 },
-          { ...split, width: 1 },
+          { ...split, width: 2 },
+          { ...fin },
           { type: "flow", name: "Kapellenweg 6", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout], battery: batIds, signs: batSigns,
             home: [I.buro, I.buroE, I.heiz, I.heizE, I.klima, I.klimaE, I.tv, I.tvE, I.wp, I.wpE1, I.wpE2, VIRT], deduct: [hp("cl_k4"), I.k4E, WB] },
           { type: "battery", name: "Speicher (Sonnen)", width: 1, soc: I.soc, power: [I.bin, I.bout], signs: { [I.bout]: -1 }, names },
@@ -363,6 +366,7 @@ const CLAUDE_SCENARIOS = (() => {
         widgets: [
           { ...aut, width: 2 },
           { ...split, width: 2 },
+          { ...fin },
           { type: "storage", name: "Gesamt · Speicher: geladen / entladen / Ladestand (versorgen beide Häuser)", width: 4, units: [
             { name: "Sonnenbatterie", soc: I.soc, capacity_kwh: 5.12, charge: [I.bin], discharge: [I.bout] },
             { name: "Marstek Venus01", soc: M1 + "state_of_charge", capacity_kwh: 5.12, charge: [I.m1in, M1 + "total_grid_import"], discharge: [I.m1out, M1 + "total_grid_export"] },
@@ -383,6 +387,7 @@ const CLAUDE_SCENARIOS = (() => {
         widgets: [
           { ...aut, width: 2 },
           { ...split, width: 2 },
+          { ...fin },
           { type: "devices", name: "Geräte Kapellenweg 6", width: 2, names, entities: devices },
           { type: "devices", name: "Kapellenweg 4 (K4)", width: 2, names: { [hp("cl_k4")]: "K4 gesamt" }, entities: [hp("cl_k4"), ...I.k4] },
           { type: "top", name: "Top-Verbraucher (gesamtes System)", width: 4, count: 15, exclude_match: "forecast|geschätzt|marstek system|sonnenbatterie|hausstrom zähler|heizstromzähler|ct phase|ct total|helper|helfer|täglich" },
@@ -572,7 +577,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const ids = [];
     for (const w of this._config?.widgets || []) {
       for (const k of ["soc", "entity"]) if (w[k]) ids.push(w[k]);
-      for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "deduct"]) ids.push(...this._ids(w[k]));
+      for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "deduct", "k4", "k6"]) ids.push(...this._ids(w[k]));
       if (Array.isArray(w.entities)) ids.push(...w.entities);
       for (const it of w.detail || []) ids.push(...this._ids(it.id));
       ids.push(...this._ids(w.detail_total));
@@ -776,6 +781,38 @@ class OmniBatteryDashboard extends HTMLElement {
       ${shown.map((r) => line(r.it.name, r.v)).join("") || '<div class="sub">Aktuell kein relevanter Verbrauch.</div>'}
       <div class="bsec" style="margin-top:4px">${line("Summe erfasster Verbraucher", sum)}${line("Kapellenweg 6 gesamt", total)}${line("Nicht zuordenbarer Verbrauch (Rest)", rest, "rest")}</div>
       <label class="sub" style="display:block;margin-top:4px"><input type="checkbox" class="zt" ${zero ? "checked" : ""}> auch Sensoren ohne Verbrauch zeigen${hidden && !zero ? " (" + hidden + " ausgeblendet)" : ""}</label></div>`;
+  }
+  /** Preise (€/kWh): Standard aus der Konfiguration, im Widget änderbar (im Browser gespeichert) */
+  _prices(w) {
+    const def = { solar_use: 0.06, feed_in: 0.06, grid: 0.34, k4: 0.25, ...(w.prices || {}) };
+    let ov = {}; try { ov = JSON.parse(localStorage.getItem("ob_prices") || "{}"); } catch (e) { ov = {}; }
+    return { ...def, ...ov };
+  }
+  _finance(w) {
+    const now = this._period === "now", pr = this._prices(w), k = now ? 1e-3 : 1;  // Aktuell: W → kW, € pro Stunde
+    const g = (v) => { const x = this._sumW(v, w); return x === null ? null : x * k; };
+    const S = g(w.solar), E = g(w.grid_export), G = g(w.grid), C = g(w.home), K4 = g(w.k4), K6 = g(w.k6);
+    if (G === null || C === null) return '<div class="sub">Keine Werte verfügbar</div>';
+    const used = Math.max(0, C - G), unit = now ? "kW" : "kWh", eur = (v) => (v === null || isNaN(v) ? "–" : v.toFixed(2).replace(".", ",") + " €" + (now ? "/h" : ""));
+    const qty = (v) => (v === null ? "–" : v.toFixed(now ? 2 : 2).replace(".", ",") + " " + unit);
+    const pc = (p) => (p * 100).toFixed(0) + " ct";
+    const e = Math.max(0, E || 0), k4 = Math.max(0, K4 || 0);
+    const cGrid = G * pr.grid, cSolar = used * pr.solar_use, rFeed = e * pr.feed_in, rK4 = k4 * pr.k4;
+    const cost = cGrid + cSolar, rev = rFeed + rK4, saldo = rev - cost, mix = C > 0 ? cost / C : 0;
+    const line = (label, q, p, v, sign) => `<div class="brow"><span>${esc(label)} <small class="sub">${qty(q)} × ${pc(p)}</small></span><b style="color:${sign < 0 ? "#c0392b" : "#2e9e5b"}">${sign < 0 ? "− " : "+ "}${esc(eur(v))}</b></div>`;
+    const sum = (label, v, big) => `<div class="brow" style="border-top:1px solid var(--divider-color);margin-top:2px;padding-top:3px"><span><b>${esc(label)}</b></span><b style="${big ? "font-size:1.2em;" : ""}color:${v < 0 ? "#c0392b" : "#2e9e5b"}">${esc((v > 0 ? "+ " : v < 0 ? "− " : "") + eur(Math.abs(v)))}</b></div>`;
+    const k6c = (K6 || 0) * mix, k4c = k4 * mix;
+    const inp = (key, label) => `<label class="sub" style="display:flex;justify-content:space-between;gap:8px;align-items:center">${esc(label)}<span><input type="number" step="0.01" min="0" class="pi" data-k="${key}" value="${pr[key]}" style="width:70px"> €/kWh</span></label>`;
+    return `<div class="bsec">Kosten</div>
+      ${line("Netzbezug", G, pr.grid, cGrid, -1)}${line("Verbrauchter Sonnenstrom", used, pr.solar_use, cSolar, -1)}${sum("Summe Kosten", -cost)}
+      <div class="bsec" style="margin-top:8px">Erlöse</div>
+      ${line("Eingespeister Sonnenstrom", e, pr.feed_in, rFeed, 1)}${line("Strom an Kapellenweg 4", k4, pr.k4, rK4, 1)}${sum("Summe Erlöse", rev)}
+      <div class="bsec" style="margin-top:8px"><div class="brow"><span><b>Saldo (Erlöse − Kosten)</b></span><b style="font-size:1.35em;color:${saldo < 0 ? "#c0392b" : "#2e9e5b"}">${esc((saldo > 0 ? "+ " : saldo < 0 ? "− " : "") + eur(Math.abs(saldo)))}</b></div></div>
+      <div class="bsec" style="margin-top:8px">Aufteilung nach Haus <small class="sub">Mischpreis ${esc((mix * 100).toFixed(1).replace(".", ","))} ct/kWh (Kosten ÷ Verbrauch gesamt)</small></div>
+      <div class="brow"><span>Kapellenweg 6 <small class="sub">${qty(K6)} Verbrauch</small></span><b>Kosten ${esc(eur(k6c))}</b></div>
+      <div class="brow"><span>Kapellenweg 4 <small class="sub">${qty(k4)} × ${pc(pr.k4)} − Kosten ${esc(eur(k4c))}</small></span><b style="color:${rK4 - k4c < 0 ? "#c0392b" : "#2e9e5b"}">Ergebnis ${esc(eur(rK4 - k4c))}</b></div>
+      <details class="pd" ${this._piOpen ? "open" : ""} style="margin-top:8px"><summary class="sub" style="cursor:pointer">Preise anpassen</summary>${inp("grid", "Netzbezug (Kosten)")}${inp("solar_use", "Verbrauchter Sonnenstrom (Kosten)")}${inp("feed_in", "Eingespeister Sonnenstrom (Erlös)")}${inp("k4", "Strom an Kapellenweg 4 (Erlös)")}</details>
+      <div class="sub" style="margin-top:6px">Verbrauchter Sonnenstrom = Gesamtverbrauch − Netzbezug (inkl. über die Speicher). Der Saldo zeigt Erlöse minus Kosten der Gesamtanlage${now ? "; „Aktuell“ in € pro Stunde" : ""}.</div>`;
   }
   _tg(k) { return !!(this._openTg ||= {})[k]; }
   _areas(w) {
@@ -1335,7 +1372,7 @@ class OmniBatteryDashboard extends HTMLElement {
     if (!force && this._statTs[p] && Date.now() - this._statTs[p] < (p === "day" || this._period === "range" ? 60000 : 300000)) return;
     const ids = new Set();
     for (const w of this._config.widgets || [])
-      for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities", "breakdown"]) this._use(w[k]).forEach((i) => ids.add(i));
+      for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities", "breakdown", "k4", "k6"]) this._use(w[k]).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.deduct).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) { for (const it of w.detail || []) this._use(it.id).forEach((i) => ids.add(i)); this._use(w.detail_total).forEach((i) => ids.add(i)); }
     for (const w of this._config.widgets || []) for (const g of w.groups || []) [g.id, ...(g.parts || []).map((p) => p.id)].forEach((x) => this._use(x).forEach((i) => ids.add(i)));
@@ -1514,6 +1551,8 @@ class OmniBatteryDashboard extends HTMLElement {
     sr.getElementById("rnext")?.addEventListener("click", () => this._shiftRange(1));
     sr.getElementById("rday")?.addEventListener("click", () => this._setRange(this._rng().from, this._rng().from));
     R("[data-tg]", "click", (el) => { const k = el.dataset.tg; (this._openTg ||= {})[k] = !this._openTg[k]; this._render(); });
+    R(".pi", "change", (inp) => { let ov = {}; try { ov = JSON.parse(localStorage.getItem("ob_prices") || "{}"); } catch (e) { ov = {}; } ov[inp.dataset.k] = Math.max(0, parseFloat(inp.value) || 0); try { localStorage.setItem("ob_prices", JSON.stringify(ov)); } catch (e) { /* ignore */ } this._render(); });
+    R(".pd", "toggle", (d) => { this._piOpen = d.open; });
     R(".zt", "change", (cb) => { this._showZero = cb.checked; this._render(); });
     R(".wbu", "click", () => sr.querySelector(".wbf").click());
     R(".wbf", "change", (inp) => { const f = inp.files?.[0]; if (f) this._wbUpload(f); });

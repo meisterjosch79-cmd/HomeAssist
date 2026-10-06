@@ -175,3 +175,6 @@ Im Umschalter oben auf **📅 Zeitraum** klicken: Von/Bis-Datum wählen (ein Tag
 
 ### Wallbox (Sonnen Charger)
 Die Wallbox hat keinen Live-Sensor in Home Assistant. Die aus dem Sonnen-Portal heruntergeladenen Ladevorgänge (TSV, Spalten Start/Ende/Wh) sind in `energy.js` (`WALLBOX_DATA`) hinterlegt; Quelldatei in `tools/wallbox_sonnen_2026.tsv`. Die Wallbox erscheint nur in den Zeiträumen (Tag/Woche/Monat/Jahr/Zeitraum), jeder Ladevorgang wird anteilig nach Zeit auf die Tage verteilt. Neue Daten: im Widget „Verbrauch nach Bereichen“ auf **📤 Neue Wallbox-Daten hochladen** klicken und die TSV/CSV aus dem Sonnen-Portal wählen (Start, Ende, Wh). Gleiche Startzeiten werden überschrieben, neue ergänzt; gespeichert in der Dashboard-Konfiguration (`wallbox_data`), sonst nur im Browser.
+
+### Finanzübersicht
+In den Szenarien neben „Verbrauch nach Bereichen“: Kosten (Netzbezug, verbrauchter Sonnenstrom), Erlöse (Einspeisung, Strom an Kapellenweg 4), Saldo und Aufteilung nach Haus (Mischpreis). Standardpreise: Netzbezug 34 ct, verbrauchter Sonnenstrom 6 ct, Einspeisung 6 ct, Strom an Kapellenweg 4 25 ct; im Widget unter „Preise anpassen“ änderbar (im Browser gespeichert). „Aktuell“ zeigt € pro Stunde.
