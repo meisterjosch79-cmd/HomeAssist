@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.39.1";
+const OB_VERSION = "0.40.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -829,7 +829,7 @@ class OmniBatteryDashboard extends HTMLElement {
     const cell = (v, plain) => `<span style="text-align:right;color:${plain || v === 0 ? "inherit" : v < 0 ? "#c0392b" : "#2e9e5b"}">${v === null ? "" : esc((v > 0 ? "+ " : v < 0 ? "− " : "") + eur(Math.abs(v)))}</span>`;
     const trow = (name, q, kost, erl) => `<span>${esc(name)}</span><span style="text-align:right">${q === null ? "" : esc(qty(q))}</span>${cell(kost || 0)}${cell(erl || 0)}${cell(kost + erl)}`;
     const inp = (key, label) => `<label class="sub" style="display:flex;justify-content:space-between;gap:8px;align-items:center">${esc(label)}<span><input type="number" step="0.01" min="0" class="pi" data-k="${key}" value="${pr[key]}" style="width:70px"> €/kWh</span></label>`;
-    return `<div class="bsec">Kosten (Geld, das fließt)</div>
+    const detail = `<div class="bsec">Kosten (Geld, das fließt)</div>
       ${line("Netzbezug", G, pr.grid, cGrid, -1)}
       <div class="bsec" style="margin-top:8px">Erlöse (Geld, das fließt)</div>
       ${line("Eingespeister Sonnenstrom", e, pr.feed_in, rFeed, 1)}${line("Strom an Kapellenweg 4", k4, pr.k4, rK4, 1)}
@@ -850,6 +850,26 @@ class OmniBatteryDashboard extends HTMLElement {
       <div class="sub" style="margin-top:4px">Die Summe der Zeilen ergibt das wirtschaftliche Ergebnis. Kosten = Verbrauch × Mischpreis. Kapellenweg 4 zahlt ${pc(pr.k4)} pro kWh (Erlös), die Einspeisung gehört zur Anlage.</div>
       <details class="pd" ${this._piOpen ? "open" : ""} style="margin-top:8px"><summary class="sub" style="cursor:pointer">Preise anpassen</summary>${inp("grid", "Netzbezug (Kosten)")}${inp("solar_use", "Selbst verbrauchter Sonnenstrom (entgangener Erlös)")}${inp("feed_in", "Eingespeister Sonnenstrom (Erlös)")}${inp("k4", "Strom an Kapellenweg 4 (Erlös)")}</details>
       <div class="sub" style="margin-top:6px">Selbst verbrauchter Sonnenstrom = Gesamtverbrauch − Netzbezug (inkl. über die Speicher). Die Beträge hinter den Sensoren in den anderen Übersichten sind Kosten zum Mischpreis${now ? "; „Aktuell“ in € pro Stunde" : ""}.</div>`;
+    const col = (v) => (v < 0 ? "#c0392b" : "#2e9e5b"), sg = (v) => (v > 0 ? "+ " : v < 0 ? "− " : "") + eur(Math.abs(v));
+    const rows = [["Kapellenweg 6", -k6c], ["Kapellenweg 4", rK4 - k4c], ["Einspeisung (Anlage)", rFeed]];
+    const mx = Math.max(1e-9, ...rows.map((r) => Math.abs(r[1])), Math.abs(eco));
+    const dbar = (name, v, bold) => `<div style="display:grid;grid-template-columns:10em 1fr 6.5em;gap:8px;align-items:center;margin:3px 0;${bold ? "border-top:1px solid var(--divider-color);padding-top:5px;margin-top:5px;font-weight:600" : ""}">
+      <span style="font-size:.9em">${esc(name)}</span>
+      <span style="position:relative;height:12px;background:var(--divider-color);border-radius:6px;opacity:.9"><i style="position:absolute;top:0;bottom:0;border-radius:6px;background:${col(v)};${v < 0 ? "right:50%" : "left:50%"};width:${(Math.abs(v) / mx * 50).toFixed(1)}%"></i><i style="position:absolute;left:50%;top:-2px;bottom:-2px;width:2px;background:var(--primary-text-color);opacity:.5"></i></span>
+      <b style="text-align:right;color:${col(v)}">${esc(sg(v))}</b></div>`;
+    const chip = (label, v, c, sub) => `<div style="flex:1 1 7em;min-width:7em;padding:8px 10px;border-radius:10px;background:var(--card-background-color)"><div class="sub" style="text-align:left">${label}</div><div style="font-size:1.15em;font-weight:600;color:${c}">${esc(v)}</div>${sub ? `<div class="sub" style="text-align:left;font-size:.8em">${sub}</div>` : ""}</div>`;
+    return `<div style="text-align:center;padding:6px 0 10px"><div class="sub">Wirtschaftliches Ergebnis ${now ? "(pro Stunde)" : "im gewählten Zeitraum"}</div>
+        <div style="font-size:2.3em;font-weight:700;line-height:1.15;color:${col(eco)}">${esc(sg(eco))}</div>
+        <div class="sub">Kassen-Saldo ${esc(sg(cash))} · entgangener Erlös − ${esc(eur(cSolar))}</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        ${chip("Erlöse", "+ " + eur(rev), "#2e9e5b", `Einspeisung ${esc(eur(rFeed))} · Kapellenweg 4 ${esc(eur(rK4))}`)}
+        ${chip("Netzbezug", "− " + eur(cGrid), "#c0392b", `${esc(qty(G))} × ${pc(pr.grid)}`)}
+        ${chip("Entgangener Erlös", "− " + eur(cSolar), "#e0a800", `${esc(qty(used))} Eigenverbrauch × ${pc(pr.solar_use)}`)}</div>
+      <div class="bsec">Ergebnis nach Haus <small class="sub">Mischpreis ${esc((mix * 100).toFixed(1).replace(".", ","))} ct/kWh</small></div>
+      ${rows.map((r) => dbar(r[0], r[1])).join("")}${dbar("Summe", eco, true)}
+      <details class="fd" ${this._fdOpen ? "open" : ""} style="margin-top:10px"><summary class="sub" style="cursor:pointer">Rechenweg im Detail</summary>
+      ${detail}
+      </details>`;
   }
   _tg(k) { return !!(this._openTg ||= {})[k]; }
   _areas(w) {
@@ -1590,6 +1610,7 @@ class OmniBatteryDashboard extends HTMLElement {
     sr.getElementById("rday")?.addEventListener("click", () => this._setRange(this._rng().from, this._rng().from));
     R("[data-tg]", "click", (el) => { const k = el.dataset.tg; (this._openTg ||= {})[k] = !this._openTg[k]; this._render(); });
     R(".pi", "change", (inp) => { let ov = {}; try { ov = JSON.parse(localStorage.getItem("ob_prices") || "{}"); } catch (e) { ov = {}; } ov[inp.dataset.k] = Math.max(0, parseFloat(inp.value) || 0); try { localStorage.setItem("ob_prices", JSON.stringify(ov)); } catch (e) { /* ignore */ } this._render(); });
+    R(".fd", "toggle", (d) => { this._fdOpen = d.open; });
     R(".pd", "toggle", (d) => { this._piOpen = d.open; });
     R(".zt", "change", (cb) => { this._showZero = cb.checked; this._render(); });
     R(".wbu", "click", () => sr.querySelector(".wbf").click());
