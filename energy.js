@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.39.0";
+const OB_VERSION = "0.39.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -818,7 +818,7 @@ class OmniBatteryDashboard extends HTMLElement {
   _finance(w) {
     const c = this._finCalc(w);
     if (!c) return '<div class="sub">Keine Werte verfügbar</div>';
-    const { now, pr, G, C, K4, K6, used, e, k4, cGrid, cSolar, rFeed, rK4, mix } = c;
+    const { now, pr, G, C, K4, K6, used, e, k4, cGrid, cSolar, rFeed, rK4, mix, cost, rev } = c;
     const unit = now ? "kW" : "kWh", eur = (v) => (v === null || isNaN(v) ? "–" : v.toFixed(2).replace(".", ",") + " €" + (now ? "/h" : ""));
     const qty = (v) => (v === null ? "–" : v.toFixed(2).replace(".", ",") + " " + unit);
     const pc = (p) => (p * 100).toFixed(0) + " ct";
@@ -826,6 +826,8 @@ class OmniBatteryDashboard extends HTMLElement {
     const line = (label, q, p, v, sign, hint = "") => `<div class="brow"${hint ? ` title="${esc(hint)}"` : ""}><span>${esc(label)} <small class="sub">${qty(q)} × ${pc(p)}</small></span><b style="color:${sign < 0 ? "#c0392b" : "#2e9e5b"}">${sign < 0 ? "− " : "+ "}${esc(eur(v))}</b></div>`;
     const sum = (label, v, big) => `<div class="brow" style="border-top:1px solid var(--divider-color);margin-top:2px;padding-top:3px"><span><b>${esc(label)}</b></span><b style="${big ? "font-size:1.35em;" : ""}color:${v < 0 ? "#c0392b" : "#2e9e5b"}">${esc((v > 0 ? "+ " : v < 0 ? "− " : "") + eur(Math.abs(v)))}</b></div>`;
     const k6c = (K6 || 0) * mix, k4c = k4 * mix;
+    const cell = (v, plain) => `<span style="text-align:right;color:${plain || v === 0 ? "inherit" : v < 0 ? "#c0392b" : "#2e9e5b"}">${v === null ? "" : esc((v > 0 ? "+ " : v < 0 ? "− " : "") + eur(Math.abs(v)))}</span>`;
+    const trow = (name, q, kost, erl) => `<span>${esc(name)}</span><span style="text-align:right">${q === null ? "" : esc(qty(q))}</span>${cell(kost || 0)}${cell(erl || 0)}${cell(kost + erl)}`;
     const inp = (key, label) => `<label class="sub" style="display:flex;justify-content:space-between;gap:8px;align-items:center">${esc(label)}<span><input type="number" step="0.01" min="0" class="pi" data-k="${key}" value="${pr[key]}" style="width:70px"> €/kWh</span></label>`;
     return `<div class="bsec">Kosten (Geld, das fließt)</div>
       ${line("Netzbezug", G, pr.grid, cGrid, -1)}
@@ -835,9 +837,17 @@ class OmniBatteryDashboard extends HTMLElement {
       <div class="bsec" style="margin-top:8px">Entgangener Erlös</div>
       ${line("Selbst verbrauchter Sonnenstrom", used, pr.solar_use, cSolar, -1, "Strom, der nicht eingespeist wurde und deshalb keine Einspeisevergütung bringt")}
       <div class="bsec" style="margin-top:8px">${sum("Wirtschaftliches Ergebnis (nach entgangenem Erlös)", eco, true)}</div>
-      <div class="bsec" style="margin-top:8px">Aufteilung nach Haus <small class="sub">Mischpreis ${esc((mix * 100).toFixed(1).replace(".", ","))} ct/kWh = (Netzbezug + entgangener Erlös) ÷ Gesamtverbrauch</small></div>
-      <div class="brow"><span>Kapellenweg 6 <small class="sub">${qty(K6)} Verbrauch</small></span><b>Kosten ${esc(eur(k6c))}</b></div>
-      <div class="brow"><span>Kapellenweg 4 <small class="sub">${qty(k4)} × ${pc(pr.k4)} − Kosten ${esc(eur(k4c))}</small></span><b style="color:${rK4 - k4c < 0 ? "#c0392b" : "#2e9e5b"}">Ergebnis ${esc(eur(rK4 - k4c))}</b></div>
+      <div class="bsec" style="margin-top:8px">Zuordnung nach Haus <small class="sub">Mischpreis ${esc((mix * 100).toFixed(1).replace(".", ","))} ct/kWh = (Netzbezug + entgangener Erlös) ÷ Gesamtverbrauch</small></div>
+      <div style="display:grid;grid-template-columns:1.5fr repeat(4,1fr);gap:2px 8px;font-size:.88em;align-items:baseline">
+        ${["", "Verbrauch", "Kosten", "Erlös", "Ergebnis"].map((h, i) => `<b class="sub" style="text-align:${i ? "right" : "left"}">${h}</b>`).join("")}
+        ${trow("Kapellenweg 6", K6 || 0, -k6c, 0)}
+        ${trow("Kapellenweg 4", k4, -k4c, rK4)}
+        ${trow("Einspeisung (Anlage)", null, 0, rFeed)}
+        <b style="border-top:1px solid var(--divider-color);padding-top:3px">Summe</b><b style="text-align:right;border-top:1px solid var(--divider-color);padding-top:3px">${esc(qty((K6 || 0) + k4))}</b>
+        <b style="text-align:right;border-top:1px solid var(--divider-color);padding-top:3px">${esc("− " + eur(cost))}</b><b style="text-align:right;border-top:1px solid var(--divider-color);padding-top:3px">${esc(eur(rev))}</b>
+        <b style="text-align:right;border-top:1px solid var(--divider-color);padding-top:3px;color:${eco < 0 ? "#c0392b" : "#2e9e5b"}">${esc((eco > 0 ? "+ " : eco < 0 ? "− " : "") + eur(Math.abs(eco)))}</b>
+      </div>
+      <div class="sub" style="margin-top:4px">Die Summe der Zeilen ergibt das wirtschaftliche Ergebnis. Kosten = Verbrauch × Mischpreis. Kapellenweg 4 zahlt ${pc(pr.k4)} pro kWh (Erlös), die Einspeisung gehört zur Anlage.</div>
       <details class="pd" ${this._piOpen ? "open" : ""} style="margin-top:8px"><summary class="sub" style="cursor:pointer">Preise anpassen</summary>${inp("grid", "Netzbezug (Kosten)")}${inp("solar_use", "Selbst verbrauchter Sonnenstrom (entgangener Erlös)")}${inp("feed_in", "Eingespeister Sonnenstrom (Erlös)")}${inp("k4", "Strom an Kapellenweg 4 (Erlös)")}</details>
       <div class="sub" style="margin-top:6px">Selbst verbrauchter Sonnenstrom = Gesamtverbrauch − Netzbezug (inkl. über die Speicher). Die Beträge hinter den Sensoren in den anderen Übersichten sind Kosten zum Mischpreis${now ? "; „Aktuell“ in € pro Stunde" : ""}.</div>`;
   }
