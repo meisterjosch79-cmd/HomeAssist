@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.34.3";
+const OB_VERSION = "0.35.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -17,6 +17,7 @@ const WIDGET_TYPES = {
   storage: { label: "", icon: "🔋", short: "Speicher-Bilanz", hidden: true },
   autarky: { label: "", icon: "🛡️", short: "Netzbezug & Autarkie", hidden: true },
   pvsplit: { label: "", icon: "☀️", short: "Solar: direkt / über Speicher", hidden: true },
+  areas: { label: "", icon: "🏘️", short: "Bereiche", hidden: true },
   claudeinfo: { label: "", icon: "✨", short: "Szenario by Claude", hidden: true },
 };
 
@@ -24,6 +25,240 @@ const WIDGET_TYPES = {
 const VIRT = "virtual:unassigned", VIRT_NAME = "Nicht zugeordnete Energiemenge";
 const VIRT_LOSS = "virtual:losses", VIRT_LOSS_NAME = "Anlagenverluste & Messabweichung";
 const HELP_PREFIX = "virtual:helper:";
+const WB = HELP_PREFIX + "wallbox";  // virtueller Sensor „Wallbox“ aus WALLBOX_DATA
+// ---------- Wallbox (Sonnen Charger): heruntergeladene Ladevorgänge [Start s, Ende s, Wh]; Stand 05.10.2026 ----------
+const WALLBOX_DATA = [
+  [1767290191,1767448460,18535],
+  [1767526768,1767893966,24342],
+  [1767904949,1767956597,7714],
+  [1768117552,1768120463,7937],
+  [1768143129,1768232752,20855],
+  [1768320752,1768388511,22951],
+  [1768418200,1768461361,10664],
+  [1768514397,1768547892,17114],
+  [1768844237,1768935169,14292],
+  [1768993873,1769013011,10760],
+  [1769068870,1769103422,5100],
+  [1769152319,1769166177,4891],
+  [1769167066,1769176195,7082],
+  [1769181656,1769247423,904],
+  [1769253118,1769336925,7652],
+  [1769512748,1769696340,24593],
+  [1769869965,1769940378,20760],
+  [1769957223,1770022212,14056],
+  [1770326324,1770361346,25867],
+  [1770551181,1770621335,3374],
+  [1770639178,1770652091,362],
+  [1770658612,1770707102,2066],
+  [1770719162,1770721907,2080],
+  [1770722798,1770727489,8057],
+  [1770882642,1770893379,2104],
+  [1770894174,1770967225,407],
+  [1770984289,1770990448,8238],
+  [1770995653,1771067120,24460],
+  [1771105018,1771144668,22980],
+  [1771156249,1771231874,6186],
+  [1771326228,1771353867,14234],
+  [1771434258,1771497254,28181],
+  [1771522038,1771602847,20320],
+  [1771674699,1771749368,10269],
+  [1771886656,1771916653,20247],
+  [1771964715,1772002850,10469],
+  [1772136988,1772194920,10945],
+  [1772263440,1772278675,12431],
+  [1772287164,1772355417,1386],
+  [1772358083,1772364920,3817],
+  [1772373112,1772441160,3826],
+  [1772546511,1772563756,1855],
+  [1772608512,1772612253,1654],
+  [1772612254,1772634035,17835],
+  [1772642845,1772720718,4691],
+  [1772728194,1772805783,5120],
+  [1772896756,1772973303,10841],
+  [1772980142,1773046040,4384],
+  [1773136978,1773140211,5870],
+  [1773213538,1773301131,20444],
+  [1773306903,1773330047,9899],
+  [1773349466,1773411887,10248],
+  [1773571820,1773645048,8628],
+  [1773659677,1773669135,7660],
+  [1773674281,1773675916,315],
+  [1773741872,1773745407,1452],
+  [1773746167,1773755495,11863],
+  [1773760721,1773772576,379],
+  [1773818975,1773904200,29255],
+  [1773953688,1774013127,11370],
+  [1774111440,1774170006,7059],
+  [1774181281,1774195964,6527],
+  [1774215654,1774249712,919],
+  [1774271567,1774349902,12933],
+  [1774437025,1774446232,10943],
+  [1774450919,1774522618,29305],
+  [1774559266,1774594558,29496],
+  [1774622737,1774684533,5982],
+  [1774707326,1774853039,23400],
+  [1774864331,1774870274,9579],
+  [1774874993,1774875136,409],
+  [1774882395,1774943659,4729],
+  [1775027113,1775027113,790],
+  [1775046806,1775114755,7724],
+  [1775136808,1775142225,12931],
+  [1775498468,1775562385,25977],
+  [1775590155,1775644783,16675],
+  [1775674948,1775818919,14587],
+  [1775827176,1775902532,1714],
+  [1776162058,1776188925,6132],
+  [1776195262,1776262065,31055],
+  [1776270462,1776333152,6920],
+  [1776422691,1776430466,7561],
+  [1776435355,1776512000,6946],
+  [1776604711,1776675301,22297],
+  [1776675583,1776679427,4894],
+  [1776708903,1776781408,7073],
+  [1776785164,1776793543,1383],
+  [1776799901,1776955282,6768],
+  [1776968117,1777028787,5803],
+  [1777053053,1777107764,20212],
+  [1777135608,1777184372,8666],
+  [1777226198,1777302425,30617],
+  [1777371674,1777381375,6035],
+  [1777404735,1777443401,3092],
+  [1777445355,1777451497,9045],
+  [1777543993,1777553040,9244],
+  [1777571586,1777626087,10101],
+  [1777654185,1777724018,14683],
+  [1777930802,1777967156,3482],
+  [1777976069,1777988631,20699],
+  [1778000178,1778133420,5679],
+  [1778399007,1778411893,7455],
+  [1778432081,1778498973,6604],
+  [1778517834,1778565922,1185],
+  [1778614345,1778651711,562],
+  [1778667116,1778672241,2065],
+  [1778679929,1778849502,26234],
+  [1778854607,1779017101,5358],
+  [1779035948,1779103999,6504],
+  [1779171608,1779194931,13856],
+  [1779260889,1779271077,12661],
+  [1779359273,1779371448,26938],
+  [1779393083,1779436205,15275],
+  [1780739384,1780739384,9425],
+  [1780757623,1780831371,6175],
+  [1780848398,1780918049,6666],
+  [1781073440,1781172189,17103],
+  [1781283473,1781339012,16246],
+  [1781371241,1781420303,3119],
+  [1781445745,1781504125,15907],
+  [1781591420,1781694833,12348],
+  [1781710938,1781767226,10846],
+  [1781797578,1781863252,5774],
+  [1782118871,1782122306,9170],
+  [1782123171,1782194324,8009],
+  [1782234061,1782295298,20876],
+  [1782317285,1782381682,5658],
+  [1782483264,1782545255,11917],
+  [1782557878,1782726996,5035],
+  [1782760580,1782836731,6489],
+  [1782901112,1782911952,13304],
+  [1783017694,1783062781,8875],
+  [1783107161,1783162423,21036],
+  [1783194075,1783241884,8737],
+  [1783263328,1783317601,6876],
+  [1783332808,1783346387,9733],
+  [1783356233,1783404934,2440],
+  [1783406271,1783406942,419],
+  [1783414952,1783418922,7868],
+  [1783491895,1783504771,7585],
+  [1783532297,1783603146,9446],
+  [1783621513,1783671212,19229],
+  [1783696307,1783756812,12162],
+  [1783797334,1783868353,7599],
+  [1783879545,1783923784,2982],
+  [1784011593,1784023235,16237],
+  [1784097865,1784109389,5994],
+  [1784111076,1784126217,1448],
+  [1784184963,1784195661,6936],
+  [1784276733,1784282113,14026],
+  [1784293222,1784303507,5746],
+  [1784377080,1784445145,10240],
+  [1784474183,1784528324,9816],
+  [1784551820,1784557678,12440],
+  [1784565309,1784614142,350],
+  [1784615432,1784628226,12269],
+  [1784701398,1784713685,10858],
+  [1784839898,1784874297,1120],
+  [1784883699,1784886795,8786],
+  [1784888076,1784896860,21217],
+  [1784914641,1784966604,8579],
+  [1785075660,1785163443,20447],
+  [1785245420,1785252602,12758],
+  [1785310604,1785318784,6203],
+  [1785394861,1785405303,7956],
+  [1785422536,1785478171,9127],
+  [1785479567,1785491309,6421],
+  [1785509755,1785565661,3819],
+  [1785565761,1785566513,2075],
+  [1785589458,1785592748,9385],
+  [1785594808,1785598298,10034],
+  [1785614588,1785743672,23983],
+  [1785758136,1785824082,27416],
+  [1785912290,1785922845,8672],
+  [1785925043,1785999711,1626],
+  [1786045509,1786088807,7924],
+  [1786098378,1786109879,7136],
+  [1786131842,1786181485,21609],
+  [1786218209,1786261698,2742],
+  [1786270320,1786339696,17328],
+  [1786706237,1786715836,26842],
+  [1786720182,1786775641,6803],
+  [1786871849,1786878080,14328],
+  [1787041312,1787063846,6712],
+  [1787081016,1787121325,712],
+  [1787122529,1787135629,15221],
+  [1787157120,1787215100,7313],
+  [1787238603,1787320878,18467],
+  [1787329867,1787391013,2923],
+  [1787395114,1787473386,3319],
+  [1787483307,1787548535,5691],
+  [1787576754,1787590288,6953],
+  [1787677591,1787752605,22913],
+  [1787769233,1787816585,6241],
+  [1787851649,1787919272,7154],
+  [1787921415,1787988407,2090],
+  [1788103922,1788168863,19259],
+  [1788182781,1788250622,8269],
+  [1788289962,1788346574,19517],
+  [1788348012,1788359438,1068],
+  [1788453133,1788595503,34712],
+  [1788598987,1788701352,2582],
+  [1788712727,1788779968,5830],
+  [1788818229,1788868038,11753],
+  [1788896800,1788961273,13514],
+  [1788977037,1789031862,14596],
+  [1789041071,1789050665,11412],
+  [1789068175,1789122903,5388],
+  [1789133770,1789219629,5688],
+  [1789231862,1789306589,3610],
+  [1789310414,1789366743,18358],
+  [1789383110,1789397086,9552],
+  [1789398331,1789451928,1736],
+  [1789453177,1789473860,19025],
+  [1789539711,1789552528,6274],
+  [1789567108,1789654097,22275],
+  [1789713649,1789725418,2147],
+  [1789813788,1789970832,5786],
+  [1790065791,1790088274,17727],
+  [1790144696,1790172635,7670],
+  [1790270116,1790319893,1041],
+  [1790325603,1790340570,13217],
+  [1790362433,1790410731,5974],
+  [1790529356,1790604859,18248],
+  [1790663583,1790694205,6556],
+  [1790711469,1790776935,6022],
+  [1790836513,1791019968,6581],
+  [1791032830,1791094303,2865],
+  [1791118013,1791178709,7104]
+];
 // ---------- Szenarien by Claude: fertige, auf dieses Haus zugeschnittene Ansichten. Neue/angepasste Szenarien kommen per Update. ----------
 const CLAUDE_SCENARIOS = (() => {
   const S = "sensor.sonnenbatterie_145854_state_", M1 = "sensor.technik_marstek_venuse_3_0_5b00_venus01_", M2 = "sensor.technik_marstek_venuse_3_0_5f7e_venus02_";
@@ -44,11 +279,21 @@ const CLAUDE_SCENARIOS = (() => {
     H("cl_bat", "Batterien gesamt (Laden +, Entladen −)", [I.bin, I.m1in, I.m2in, I.bout, I.m1out, I.m2out], { [I.bout]: -1, [I.m1out]: -1, [I.m2out]: -1 }),
     H("cl_pv", "Solar gesamt", [I.prod, I.pvE]),
     H("cl_gesamt", "Verbrauch Gesamt (K6 + K4)", [hp("cl_pv"), hp("cl_netz"), hp("cl_bat")], { [hp("cl_bat")]: -1 }),
-    H("cl_k6", "Verbrauch Kapellenweg 6 (Gesamt − K4)", [hp("cl_gesamt"), hp("cl_k4")], { [hp("cl_k4")]: -1 }),
+    H("cl_k6", "Verbrauch Kapellenweg 6 gesamt (Gesamt − K4)", [hp("cl_gesamt"), hp("cl_k4")], { [hp("cl_k4")]: -1 }),
+    H("cl_wp", "Wärmepumpe", [I.wp, I.wpE1, I.wpE2]),
+    H("cl_wbwp", "Wallbox & Wärmepumpe", [WB, hp("cl_wp")]),
+    H("cl_haus", "Kapellenweg 6 Hausverbrauch (ohne Wallbox & Wärmepumpe)", [hp("cl_k6"), hp("cl_wbwp")], { [hp("cl_wbwp")]: -1 }),
   ];
-  const aut = { type: "autarky", name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], breakdown: [hp("cl_k6"), hp("cl_k4")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout],
-    names: { [hp("cl_k6")]: "↳ Kapellenweg 6", [hp("cl_k4")]: "↳ Kapellenweg 4", [I.gin]: "Sonnen Netzbezug (Leistung)", [I.impE]: "Sonnen Netzbezug (Zähler)", [I.gout]: "Sonnen Einspeisung (Leistung)", [I.expE]: "Sonnen Einspeisung (Zähler)", [I.prod]: "Sonnen PV-Produktion (Leistung)", [I.pvE]: "PV-Produktion (Zähler)" } };
-  const split = { type: "devices", name: "Verbrauch: Gesamt · Kapellenweg 6 · Kapellenweg 4", width: 2, names: { [hp("cl_gesamt")]: "Gesamt (K6 + K4)", [hp("cl_k6")]: "Kapellenweg 6", [hp("cl_k4")]: "Kapellenweg 4" }, entities: [hp("cl_gesamt"), hp("cl_k6"), hp("cl_k4")] };
+  const aut = { type: "autarky", name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], breakdown: [hp("cl_haus"), hp("cl_wbwp"), hp("cl_k4")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout],
+    names: { [hp("cl_haus")]: "↳ Kapellenweg 6 Hausverbrauch", [hp("cl_wbwp")]: "↳ Wallbox & Wärmepumpe", [hp("cl_k4")]: "↳ Kapellenweg 4", [I.gin]: "Sonnen Netzbezug (Leistung)", [I.impE]: "Sonnen Netzbezug (Zähler)", [I.gout]: "Sonnen Einspeisung (Leistung)", [I.expE]: "Sonnen Einspeisung (Zähler)", [I.prod]: "Sonnen PV-Produktion (Leistung)", [I.pvE]: "PV-Produktion (Zähler)" } };
+  const split = { type: "areas", name: "Verbrauch nach Bereichen", width: 2,
+    note: "Wallbox: aus den heruntergeladenen Ladevorgängen (nur in Zeiträumen, anteilig nach Zeit verteilt). Hausverbrauch = Kapellenweg 6 − Wallbox − Wärmepumpe.",
+    groups: [
+      { name: "Gesamt (Kapellenweg 6 + 4)", id: hp("cl_gesamt") },
+      { name: "Kapellenweg 6 · Hausverbrauch", id: hp("cl_haus"), parts: [{ name: "Büro Steckdosenleiste", id: [I.buro, I.buroE] }, { name: "Heizstab Warmwasser", id: [I.heiz, I.heizE] }, { name: "Klimaanlage", id: [I.klima, I.klimaE] }, { name: "Fernseher", id: [I.tv, I.tvE] }] },
+      { name: "Wallbox & Wärmepumpe", id: hp("cl_wbwp"), parts: [{ name: "Wallbox", id: WB }, { name: "Wärmepumpe", id: hp("cl_wp") }] },
+      { name: "Kapellenweg 4 (K4) aufgeschlüsselt", id: hp("cl_k4"), parts: I.k4.map((id, n) => ({ name: "Phase L" + (n + 1), id })) },
+    ] };
   const batIds = [I.bin, I.bout, I.m1in, I.m1out, I.m2in, I.m2out], batSigns = { [I.bout]: -1, [I.m1out]: -1, [I.m2out]: -1 };
   const names = {
     [I.prod]: "PV-Produktion (Sonnen)", [I.gin]: "Netzbezug (Sonnen)", [I.gout]: "Einspeisung (Sonnen)", [I.bin]: "Sonnen lädt", [I.bout]: "Sonnen entlädt",
@@ -70,7 +315,7 @@ const CLAUDE_SCENARIOS = (() => {
           { ...aut, width: 1 },
           { ...split, width: 1 },
           { type: "flow", name: "Kapellenweg 6", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout], battery: batIds, signs: batSigns,
-            home: [I.buro, I.buroE, I.heiz, I.heizE, I.klima, I.klimaE, I.tv, I.tvE, I.wp, I.wpE1, I.wpE2, VIRT], deduct: [hp("cl_k4"), I.k4E] },
+            home: [I.buro, I.buroE, I.heiz, I.heizE, I.klima, I.klimaE, I.tv, I.tvE, I.wp, I.wpE1, I.wpE2, VIRT], deduct: [hp("cl_k4"), I.k4E, WB] },
           { type: "battery", name: "Speicher (Sonnen)", width: 1, soc: I.soc, power: [I.bin, I.bout], signs: { [I.bout]: -1 }, names },
           { type: "balance", name: "Bilanz Kapellenweg 6", width: 2 },
           { type: "devices", name: "Geräte Kapellenweg 6", width: 1, names, entities: devices },
@@ -93,8 +338,9 @@ const CLAUDE_SCENARIOS = (() => {
             { entity: hp("cl_bat"), name: "Speicher (Laden + / Entladen −)", color: "#2e9e5b" },
             { entity: hp("cl_gesamt"), name: "Verbrauch Gesamt", color: "#9c27b0" },
           ] },
-          { type: "history", name: "Kapellenweg 6 (Gesamt − K4)", hours: 24, width: 2, series: [
-            { entity: hp("cl_k6"), name: "Verbrauch K6", color: "#03a9f4" },
+          { type: "history", name: "Kapellenweg 6 (Haus & Wärmepumpe)", hours: 24, width: 2, series: [
+            { entity: hp("cl_haus"), name: "K6 Hausverbrauch", color: "#03a9f4" },
+            { entity: hp("cl_wp"), name: "Wärmepumpe", color: "#e8833a" },
             { entity: hp("cl_hausstrom"), name: "Hausstrom Zähler", color: "#9c27b0" },
           ] },
           { type: "history", name: "Kapellenweg 4 (K4)", hours: 24, width: 2, series: [
@@ -323,13 +569,14 @@ class OmniBatteryDashboard extends HTMLElement {
       for (const k of ["soc", "entity"]) if (w[k]) ids.push(w[k]);
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "deduct"]) ids.push(...this._ids(w[k]));
       if (Array.isArray(w.entities)) ids.push(...w.entities);
+      for (const g of w.groups || []) for (const x of [g.id, ...(g.parts || []).map((p) => p.id)]) ids.push(...this._ids(x));
     }
     for (const h of this._config?.helpers || []) ids.push(...this._ids(h.entities));
     return ids;
   }
 
   /** Anzeigename eines Sensors im Widget (eigener Name oder Entity-Name) */
-  _label(w, id) { return w.names?.[id] || (id === VIRT ? VIRT_NAME + " (virtuell)" : id === VIRT_LOSS ? VIRT_LOSS_NAME + " (virtuell)" : null) || this._helper(id)?.name || this._st(id)?.attributes?.friendly_name || id; }
+  _label(w, id) { return w.names?.[id] || (id === WB ? "Wallbox" : null) || (id === VIRT ? VIRT_NAME + " (virtuell)" : id === VIRT_LOSS ? VIRT_LOSS_NAME + " (virtuell)" : null) || this._helper(id)?.name || this._st(id)?.attributes?.friendly_name || id; }
   /** Kleine Einzelwerte aller Sensoren eines Widget-Feldes */
   _parts(w, ids, always = false) {
     ids = ids.filter(Boolean);
@@ -339,6 +586,7 @@ class OmniBatteryDashboard extends HTMLElement {
   _ids(v) { return Array.isArray(v) ? v : v ? [v] : []; }
   _helper(id) { return typeof id === "string" && id.startsWith(HELP_PREFIX) ? (this._config?.helpers || []).find((h) => h.id === id.slice(HELP_PREFIX.length)) : null; }
   _isEnergy(id) {
+    if (id === WB) return true;
     if (this._helper(id)) { const f = this._hflat(id); return f.length > 0 && f.every((x) => this._isEnergy(x.id)); }
     const a = this._st(id)?.attributes || {};
     return ["Wh", "kWh", "MWh"].includes(a.unit_of_measurement) || a.device_class === "energy";
@@ -365,6 +613,7 @@ class OmniBatteryDashboard extends HTMLElement {
   _num(id) { const s = this._st(id); const v = s ? parseFloat(s.state) : NaN; return isNaN(v) ? null : v; }
   /** Wert in Watt, berücksichtigt kW/MW */
   _watts(id) {
+    if (id === WB) return this._period === "now" ? null : this._wallbox();
     if (id === VIRT) return this._unassigned();
     if (id === VIRT_LOSS) return this._losses();
     const hp = this._helper(id);
@@ -506,6 +755,12 @@ class OmniBatteryDashboard extends HTMLElement {
       <div class="parts"><div><span>${now ? "lädt gerade" : "geladen"}</span><b>${esc(this._fmtW(r.ch))}</b></div><div><span>${now ? "entlädt gerade" : "entladen"}</span><b>${esc(this._fmtW(r.dis))}</b></div></div></div>`;
     return `<div class="flow">${units.map((r) => row(r.u.name || r.u.soc, r)).join("")}${units.length > 1 ? row("Summe aller Speicher", { soc: tsoc, ch: tch, dis: tdis, cap: tcap }, true) : ""}</div>
       ${now ? "" : '<div class="sub" style="margin-top:6px">Zeiträume: Zähler (kWh) wo vorhanden, sonst aus der Leistung hochgerechnet (Sonnen).</div>'}`;
+  }
+  _areas(w) {
+    const now = this._period === "now";
+    const row = (name, id, cls) => { const v = this._sumW(id, w); const wbOnly = this._ids(id).includes(WB) && now; return `<div class="brow ${cls}"><span>${esc(name)}</span><b>${esc(wbOnly ? "nur in Zeiträumen" : this._fmtW(v))}</b></div>`; };
+    return (w.groups || []).map((g) => `<div class="bsec" style="margin-top:8px">${row(g.name, g.id, "")}</div>${(g.parts || []).map((p) => row("↳ " + p.name, p.id, "sub")).join("")}`).join("")
+      + (w.note ? `<div class="sub" style="margin-top:6px">${esc(w.note)}</div>` : "");
   }
   _autarky(w) {
     const cons = this._sumW(w.home, w), imp = this._sumW(w.grid, w), exp = this._sumW(w.grid_export, w), sol = this._sumW(w.solar, w);
@@ -1051,6 +1306,7 @@ class OmniBatteryDashboard extends HTMLElement {
     for (const w of this._config.widgets || [])
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities", "breakdown"]) this._use(w[k]).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.deduct).forEach((i) => ids.add(i));
+    for (const w of this._config.widgets || []) for (const g of w.groups || []) [g.id, ...(g.parts || []).map((p) => p.id)].forEach((x) => this._use(x).forEach((i) => ids.add(i)));
     for (const w of this._config.widgets || []) for (const u of w.units || []) for (const k of ["charge", "discharge"]) this._use(u[k]).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.entities).forEach((i) => ids.add(i));
     const essential = new Set(ids);
@@ -1063,7 +1319,7 @@ class OmniBatteryDashboard extends HTMLElement {
       comps.filter((x) => String(x).startsWith(HELP_PREFIX)).forEach((x) => expand(x, seen));
     };
     for (const id of [...ids]) if (this._helper(id)) { ids.delete(id); expand(id); }
-    ids.delete(VIRT); ids.delete(VIRT_LOSS);
+    ids.delete(VIRT); ids.delete(VIRT_LOSS); ids.delete(WB);
     if (!ids.size) return;
     this._statBusy = true; this._loading = !this._stat[p]; if (this._loading) this._render();
     const T = (v) => (typeof v === "number" ? v : Date.parse(v));
@@ -1228,6 +1484,18 @@ class OmniBatteryDashboard extends HTMLElement {
     this.shadowRoot.querySelectorAll(".seg button[data-p]").forEach((b) => b.addEventListener("click", () => this._setPeriod(b.dataset.p)));
     this._drawCharts();
     keep();
+  }
+  /** Wallbox-Energie (kWh) im gewählten Zeitraum: jeder Ladevorgang wird anteilig nach Zeit auf den Zeitraum verteilt */
+  _wallbox() {
+    const a = this._periodStart().getTime(), b = this._periodEnd().getTime();
+    let wh = 0;
+    for (const [s, e, w] of WALLBOX_DATA) {
+      const s0 = s * 1000, e0 = e * 1000;
+      if (e0 <= s0) { if (s0 >= a && s0 < b) wh += w; continue; }
+      const ov = Math.min(e0, b) - Math.max(s0, a);
+      if (ov > 0) wh += w * ov / (e0 - s0);
+    }
+    return wh / 1000;
   }
   /** Scrollposition (Seite und scrollbare Container) beim Neuzeichnen halten: Höhe vorübergehend festhalten, danach Position wiederherstellen */
   _keepScroll() {

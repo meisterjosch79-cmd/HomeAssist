@@ -172,3 +172,6 @@ Pro Speicher (Sonnen, Marstek Venus01/02) und in Summe: geladen, entladen, Lades
 
 ### Beliebiger Tag / Zeitraum
 Im Umschalter oben auf **📅 Zeitraum** klicken: Von/Bis-Datum wählen (ein Tag = Von und Bis gleich), mit ‹ › um die Länge des Zeitraums vor- und zurückblättern, „1 Tag“ setzt auf einen einzelnen Tag. Gilt für alle Widgets und Szenarien; die Auswahl wird im Browser gemerkt. Daten kommen aus der Langzeitstatistik von Home Assistant.
+
+### Wallbox (Sonnen Charger)
+Die Wallbox hat keinen Live-Sensor in Home Assistant. Die aus dem Sonnen-Portal heruntergeladenen Ladevorgänge (TSV, Spalten Start/Ende/Wh) sind in `energy.js` (`WALLBOX_DATA`) hinterlegt; Quelldatei in `tools/wallbox_sonnen_2026.tsv`. Die Wallbox erscheint nur in den Zeiträumen (Tag/Woche/Monat/Jahr/Zeitraum), jeder Ladevorgang wird anteilig nach Zeit auf die Tage verteilt. Neue Daten: TSV erneut exportieren und im Chat an Claude geben.
