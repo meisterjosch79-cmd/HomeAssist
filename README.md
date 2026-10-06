@@ -169,3 +169,6 @@ Unten in der Karte auf **✥ Layout** klicken. Danach erscheinen an jedem Widget
 
 ### Szenario „Speicher-Bilanz & Solar-Verwendung“
 Pro Speicher (Sonnen, Marstek Venus01/02) und in Summe: geladen, entladen, Ladestand; dazu eine Aufteilung der Solarenergie in *direkt verbraucht*, *über Speicher* und *eingespeist* (Näherung: Netzladung der Speicher ist nicht unterscheidbar).
+
+### Beliebiger Tag / Zeitraum
+Im Umschalter oben auf **📅 Zeitraum** klicken: Von/Bis-Datum wählen (ein Tag = Von und Bis gleich), mit ‹ › um die Länge des Zeitraums vor- und zurückblättern, „1 Tag“ setzt auf einen einzelnen Tag. Gilt für alle Widgets und Szenarien; die Auswahl wird im Browser gemerkt. Daten kommen aus der Langzeitstatistik von Home Assistant.

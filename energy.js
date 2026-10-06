@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.33.0";
+const OB_VERSION = "0.34.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -244,7 +244,7 @@ function balanceApply(roles, cons, ov) {
   }
 }
 const BAL_DEFAULT = { solar: "add", grid: "add", battery: "sub", area: "sub", consumer: "sub" };
-const PERIODS = { now: "Aktuell", day: "Tag", week: "Woche", month: "Monat", year: "Jahr" };
+const PERIODS = { now: "Aktuell", day: "Tag", week: "Woche", month: "Monat", year: "Jahr", range: "📅 Zeitraum" };
 const hashStr = (str) => { let h = 0; for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 const canon = (o) => JSON.stringify(o, (k, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -380,7 +380,7 @@ class OmniBatteryDashboard extends HTMLElement {
         return t;
       } finally { seen.delete(id); }
     }
-    if (this._period !== "now") return this._stat?.[this._period]?.[id] ?? null;  // kWh aus Statistik
+    if (this._period !== "now") return this._stat?.[this._statKey()]?.[id] ?? null;  // kWh aus Statistik
     if (this._isEnergy(id)) return null;
     const v = this._num(id); if (v === null) return null;
     const u = this._st(id).attributes.unit_of_measurement;
@@ -805,7 +805,7 @@ class OmniBatteryDashboard extends HTMLElement {
       const act = all.filter((r) => r.v >= 1); info.active = act.length;
       rows = act.filter((r) => !ex.has(r.id) && !matchEx(r.id)); info.excluded = act.length - rows.length;
     } else {
-      const st = this._stat?.[this._period] || {}, cand = this._topCandidates();
+      const st = this._stat?.[this._statKey()] || {}, cand = this._topCandidates();
       info.total = cand.length;
       const act = cand.map((id) => ({ id, v: st[id] ?? null })).filter((r) => r.v !== null && r.v >= 0.01); info.active = act.length;
       rows = act.filter((r) => !ex.has(r.id) && !matchEx(r.id)); info.excluded = act.length - rows.length;
@@ -992,9 +992,38 @@ class OmniBatteryDashboard extends HTMLElement {
     }
   }
 
+  /** Zeitraum „Zeitraum“ (frei wählbar): Von/Bis als Datum JJJJ-MM-TT, gespeichert im Browser */
+  _rng() {
+    if (!this._range) {
+      try { this._range = JSON.parse(localStorage.getItem("ob_range") || "null"); } catch (e) { this._range = null; }
+      if (!this._range?.from) { const t = this._iso(new Date()); this._range = { from: t, to: t }; }
+    }
+    return this._range;
+  }
+  _iso(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+  _pd(s) { const [y, m, d] = String(s).split("-").map(Number); return new Date(y, (m || 1) - 1, d || 1); }
+  _statKey() { if (this._period !== "range") return this._period; const r = this._rng(); return "range:" + r.from + ":" + r.to; }
+  _setRange(from, to) {
+    if (!from) from = this._rng().from;
+    if (!to || to < from) to = from;
+    this._range = { from, to };
+    try { localStorage.setItem("ob_range", JSON.stringify(this._range)); } catch (e) { /* ignore */ }
+    this._sig = ""; this._loadStats(true); this._render();
+  }
+  _shiftRange(dir) {
+    const r = this._rng(), a = this._pd(r.from), b = this._pd(r.to), n = Math.round((b - a) / 864e5) + 1;
+    a.setDate(a.getDate() + dir * n); b.setDate(b.getDate() + dir * n);
+    this._setRange(this._iso(a), this._iso(b));
+  }
+  _periodEnd() {
+    if (this._period !== "range") return new Date();
+    const e = this._pd(this._rng().to); e.setDate(e.getDate() + 1);
+    return e > new Date() ? new Date() : e;
+  }
   _periodStart() {
     const n = new Date(), y = n.getFullYear(), m = n.getMonth(), d = n.getDate();
     switch (this._period) {
+      case "range": return this._pd(this._rng().from);
       case "day": return new Date(y, m, d);
       case "week": return new Date(y, m, d - ((n.getDay() + 6) % 7));
       case "month": return new Date(y, m, 1);
@@ -1013,10 +1042,10 @@ class OmniBatteryDashboard extends HTMLElement {
 
   /** Verbrauch je Sensor (kWh) aus den Langzeitstatistiken von Home Assistant */
   async _loadStats(force = false) {
-    const p = this._period;
-    if (p === "now" || !this._hass || this._statBusy) return;
+    const p = this._statKey();
+    if (this._period === "now" || !this._hass || this._statBusy) return;
     this._stat ||= {}; this._statTs ||= {};
-    if (!force && this._statTs[p] && Date.now() - this._statTs[p] < (p === "day" ? 60000 : 300000)) return;
+    if (!force && this._statTs[p] && Date.now() - this._statTs[p] < (p === "day" || this._period === "range" ? 60000 : 300000)) return;
     const ids = new Set();
     for (const w of this._config.widgets || [])
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities"]) this._use(w[k]).forEach((i) => ids.add(i));
@@ -1043,8 +1072,8 @@ class OmniBatteryDashboard extends HTMLElement {
       const all = [...ids], chunks = [];
       for (let i = 0; i < all.length; i += 100) chunks.push(all.slice(i, i + 100));
       const parts = await Promise.allSettled(chunks.map((c) => this._hass.callWS({
-        type: "recorder/statistics_during_period", start_time: this._periodStart().toISOString(), end_time: new Date(now).toISOString(),
-        statistic_ids: c, period: { day: "5minute", week: "hour", month: "day", year: "day" }[p], types: ["mean", "change"],
+        type: "recorder/statistics_during_period", start_time: this._periodStart().toISOString(), end_time: this._periodEnd().toISOString(),
+        statistic_ids: c, period: this._period === "range" ? ((this._periodEnd() - this._periodStart()) / 864e5 <= 3 ? "5minute" : (this._periodEnd() - this._periodStart()) / 864e5 <= 14 ? "hour" : "day") : { day: "5minute", week: "hour", month: "day", year: "day" }[p], types: ["mean", "change"],
       })));
       const res = Object.assign({}, ...parts.filter((x) => x.status === "fulfilled").map((x) => x.value || {}));
       const bad = parts.find((x) => x.status === "rejected");
@@ -1112,6 +1141,7 @@ class OmniBatteryDashboard extends HTMLElement {
     }).join("");
     const seg = this._config.show_periods === false ? "" : `<div class="seg">${Object.entries(PERIODS).map(([k, v]) =>
       `<button data-p="${k}" class="${k === this._period ? "on" : ""}">${v}</button>`).join("")}</div>
+      ${this._period === "range" ? (() => { const r = this._rng(), t = this._iso(new Date()); return `<div class="seg rng"><button id="rprev" title="Zeitraum zurück">‹</button><input type="date" id="rfrom" value="${r.from}" max="${t}"><span>bis</span><input type="date" id="rto" value="${r.to}" max="${t}"><button id="rnext" title="Zeitraum vor">›</button><button id="rday" title="Nur ein Tag">1 Tag</button></div>`; })() : ""}
       ${this._period !== "now" && this._statGlitch?.length ? `<div class="sub warn">Unplausible Statistikwerte (über ${Number(this._config.max_kw) || 100} kW) ignoriert bei: ${esc(this._statGlitch.slice(0, 4).map((i) => this._label({}, i)).join(", "))}${this._statGlitch.length > 4 ? ` … (+${this._statGlitch.length - 4})` : ""}</div>` : ""}
       ${this._period !== "now" && this._statMissing?.length ? `<div class="sub warn">Keine Langzeitstatistik für: ${esc(this._statMissing.map((i) => this._label({}, i)).join(", "))} (Sensor braucht eine state_class)</div>` : ""}`;
     const keep = this._keepScroll();
@@ -1119,6 +1149,8 @@ class OmniBatteryDashboard extends HTMLElement {
       :host{display:block}
       .seg{display:flex;justify-content:center;gap:4px;flex-wrap:wrap;margin:0 0 12px}
       .seg button{padding:6px 14px;border-radius:16px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer;font:inherit}
+      .seg input[type=date]{padding:5px 8px;border-radius:10px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);font:inherit}
+      .seg.rng{align-items:center;margin-top:-6px}
       .seg button.on{background:var(--primary-color);color:var(--text-primary-color,#fff);border-color:var(--primary-color)}
       .warn{text-align:center;margin:-4px 0 10px;color:var(--warning-color,#e8833a)}
       ha-card{padding:16px}
@@ -1186,7 +1218,13 @@ class OmniBatteryDashboard extends HTMLElement {
     R(".ta", "blur", () => { if (this._pendingRender) { this._pendingRender = false; this._sig = ""; this._render(); } });
     R(".tf", "click", () => { this._showHidden = !this._showHidden; this._topCache = {}; this._sig = ""; this._render(); });
     R(".tr", "click", () => { this._hideSet().clear(); this._saveHide(); this._topCache = {}; this._sig = ""; this._render(); });
-    this.shadowRoot.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => this._setPeriod(b.dataset.p)));
+    const sr = this.shadowRoot;
+    sr.getElementById("rfrom")?.addEventListener("change", (e) => this._setRange(e.target.value, this._rng().to));
+    sr.getElementById("rto")?.addEventListener("change", (e) => this._setRange(this._rng().from, e.target.value));
+    sr.getElementById("rprev")?.addEventListener("click", () => this._shiftRange(-1));
+    sr.getElementById("rnext")?.addEventListener("click", () => this._shiftRange(1));
+    sr.getElementById("rday")?.addEventListener("click", () => this._setRange(this._rng().from, this._rng().from));
+    this.shadowRoot.querySelectorAll(".seg button[data-p]").forEach((b) => b.addEventListener("click", () => this._setPeriod(b.dataset.p)));
     this._drawCharts();
     keep();
   }
