@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.30.1";
+const OB_VERSION = "0.31.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -1074,6 +1074,7 @@ class OmniBatteryDashboard extends HTMLElement {
       `<button data-p="${k}" class="${k === this._period ? "on" : ""}">${v}</button>`).join("")}</div>
       ${this._period !== "now" && this._statGlitch?.length ? `<div class="sub warn">Unplausible Statistikwerte (über ${Number(this._config.max_kw) || 100} kW) ignoriert bei: ${esc(this._statGlitch.slice(0, 4).map((i) => this._label({}, i)).join(", "))}${this._statGlitch.length > 4 ? ` … (+${this._statGlitch.length - 4})` : ""}</div>` : ""}
       ${this._period !== "now" && this._statMissing?.length ? `<div class="sub warn">Keine Langzeitstatistik für: ${esc(this._statMissing.map((i) => this._label({}, i)).join(", "))} (Sensor braucht eine state_class)</div>` : ""}`;
+    const keep = this._keepScroll();
     this.shadowRoot.innerHTML = `<style>
       :host{display:block}
       .seg{display:flex;justify-content:center;gap:4px;flex-wrap:wrap;margin:0 0 12px}
@@ -1147,6 +1148,29 @@ class OmniBatteryDashboard extends HTMLElement {
     R(".tr", "click", () => { this._hideSet().clear(); this._saveHide(); this._topCache = {}; this._sig = ""; this._render(); });
     this.shadowRoot.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => this._setPeriod(b.dataset.p)));
     this._drawCharts();
+    keep();
+  }
+  /** Scrollposition (Seite und scrollbare Container) beim Neuzeichnen halten: Höhe vorübergehend festhalten, danach Position wiederherstellen */
+  _keepScroll() {
+    const saved = [];
+    for (let n = this; n; n = n.parentNode ? (n.parentNode.host || n.parentNode) : null) {
+      if (n.nodeType === 1 && n.scrollTop > 0) saved.push([n, n.scrollTop]);
+    }
+    if (window.scrollY > 0) saved.push([window, window.scrollY]);
+    const inner = [...(this.shadowRoot?.querySelectorAll(".dev,.scroll,.list,[class*=scroll]") || [])].filter((e) => e.scrollTop > 0).map((e) => [e.className, e.scrollTop]);
+    const h = this.offsetHeight;
+    if (h) this.style.minHeight = h + "px";
+    return () => {
+      const restore = () => {
+        saved.forEach(([n, t]) => { if (n === window) window.scrollTo(window.scrollX, t); else n.scrollTop = t; });
+        inner.forEach(([c, t]) => { const e = this.shadowRoot.querySelector("." + String(c).trim().split(/\s+/).join(".")); if (e) e.scrollTop = t; });
+      };
+      restore();
+      requestAnimationFrame(restore);
+      clearTimeout(this._mh);
+      clearTimeout(this._mr); this._mr = setTimeout(restore, 300);
+      this._mh = setTimeout(() => { this.style.minHeight = ""; restore(); }, 1500);
+    };
   }
 }
 
