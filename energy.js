@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.36.1";
+const OB_VERSION = "0.37.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -284,13 +284,19 @@ const CLAUDE_SCENARIOS = (() => {
     H("cl_wbwp", "Wallbox & Wärmepumpe", [WB, hp("cl_wp")]),
     H("cl_haus", "Kapellenweg 6 Hausverbrauch (ohne Wallbox & Wärmepumpe)", [hp("cl_k6"), hp("cl_wbwp")], { [hp("cl_wbwp")]: -1 }),
   ];
-  const aut = { type: "autarky", name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], breakdown: [hp("cl_k6"), hp("cl_haus"), WB, hp("cl_wp"), hp("cl_k4")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout],
+  const det = { detail_total: [hp("cl_k6")], detail: [
+    { name: "Wallbox", id: WB }, { name: "Wärmepumpe", id: hp("cl_wp") },
+    { name: "Büro Steckdosenleiste", id: [I.buro, I.buroE] }, { name: "Heizstab Warmwasser", id: [I.heiz, I.heizE] },
+    { name: "Klimaanlage", id: [I.klima, I.klimaE] }, { name: "Fernseher", id: [I.tv, I.tvE] },
+    { name: "Smart Plug", id: ["sensor.smart_plug_2103098693615790845048e1e960b77a_power", "sensor.smart_plug_2103098693615790845048e1e960b77a_energy"] },
+  ] };
+  const aut = { type: "autarky", ...det, name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], breakdown: [hp("cl_k6"), hp("cl_haus"), WB, hp("cl_wp"), hp("cl_k4")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout],
     names: { [hp("cl_k6")]: "↳ Kapellenweg 6 gesamt", [hp("cl_haus")]: "     · Hausverbrauch", [WB]: "     · Wallbox", [hp("cl_wp")]: "     · Wärmepumpe", [hp("cl_k4")]: "↳ Kapellenweg 4 gesamt", [I.gin]: "Sonnen Netzbezug (Leistung)", [I.impE]: "Sonnen Netzbezug (Zähler)", [I.gout]: "Sonnen Einspeisung (Leistung)", [I.expE]: "Sonnen Einspeisung (Zähler)", [I.prod]: "Sonnen PV-Produktion (Leistung)", [I.pvE]: "PV-Produktion (Zähler)" } };
-  const split = { type: "areas", name: "Verbrauch nach Bereichen", width: 2, wallbox_upload: true,
+  const split = { type: "areas", ...det, name: "Verbrauch nach Bereichen", width: 2, wallbox_upload: true,
     note: "Wallbox: aus den heruntergeladenen Ladevorgängen (nur in Zeiträumen, anteilig nach Zeit verteilt). Hausverbrauch = Kapellenweg 6 − Wallbox − Wärmepumpe.",
     groups: [
       { name: "Gesamt (Kapellenweg 6 + 4)", id: hp("cl_gesamt") },
-      { name: "Kapellenweg 6 gesamt", id: hp("cl_k6"), parts: [{ name: "Hausverbrauch", id: hp("cl_haus") }, { name: "Wallbox", id: WB }, { name: "Wärmepumpe", id: hp("cl_wp") }] },
+      { name: "Kapellenweg 6 gesamt", id: hp("cl_k6"), toggle: "k6", parts: [{ name: "Hausverbrauch", id: hp("cl_haus") }, { name: "Wallbox", id: WB }, { name: "Wärmepumpe", id: hp("cl_wp") }] },
       { name: "Kapellenweg 4 gesamt", id: hp("cl_k4"), parts: I.k4.map((id, n) => ({ name: "Phase L" + (n + 1), id })) },
     ] };
   const batIds = [I.bin, I.bout, I.m1in, I.m1out, I.m2in, I.m2out], batSigns = { [I.bout]: -1, [I.m1out]: -1, [I.m2out]: -1 };
@@ -568,6 +574,8 @@ class OmniBatteryDashboard extends HTMLElement {
       for (const k of ["soc", "entity"]) if (w[k]) ids.push(w[k]);
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "deduct"]) ids.push(...this._ids(w[k]));
       if (Array.isArray(w.entities)) ids.push(...w.entities);
+      for (const it of w.detail || []) ids.push(...this._ids(it.id));
+      ids.push(...this._ids(w.detail_total));
       for (const g of w.groups || []) for (const x of [g.id, ...(g.parts || []).map((p) => p.id)]) ids.push(...this._ids(x));
     }
     for (const h of this._config?.helpers || []) ids.push(...this._ids(h.entities));
@@ -755,14 +763,35 @@ class OmniBatteryDashboard extends HTMLElement {
     return `<div class="flow">${units.map((r) => row(r.u.name || r.u.soc, r)).join("")}${units.length > 1 ? row("Summe aller Speicher", { soc: tsoc, ch: tch, dis: tdis, cap: tcap }, true) : ""}</div>
       ${now ? "" : '<div class="sub" style="margin-top:6px">Zeiträume: Zähler (kWh) wo vorhanden, sonst aus der Leistung hochgerechnet (Sonnen).</div>'}`;
   }
+  /** Liste aller Verbraucher von Kapellenweg 6 (nach Verbrauch sortiert), Summe und nicht zuordenbarer Rest */
+  _k6detail(w) {
+    const now = this._period === "now", thr = now ? 5 : 0.01, zero = !!this._showZero;
+    const total = this._sumW(w.detail_total, w);
+    const rows = (w.detail || []).map((it) => ({ it, v: this._sumW(it.id, w) })).filter((r) => r.v !== null).sort((a, b) => b.v - a.v);
+    const shown = rows.filter((r) => zero || Math.abs(r.v) >= thr), hidden = rows.length - shown.length;
+    const sum = rows.reduce((a, r) => a + r.v, 0), rest = total === null ? null : total - sum;
+    const line = (n, v, cls = "") => `<div class="brow ${cls}"><span>${esc(n)}</span><b>${esc(this._fmtW(v))}</b></div>`;
+    return `<div class="k6d" style="margin:4px 0 8px 12px;padding:6px 10px;border-left:3px solid var(--primary-color);background:var(--secondary-background-color,rgba(0,0,0,.04));border-radius:6px">
+      <div class="sub" style="text-align:left;margin-bottom:4px">Verbraucher Kapellenweg 6, größte zuerst${now ? " (aktuelle Leistung)" : ""}</div>
+      ${shown.map((r) => line(r.it.name, r.v)).join("") || '<div class="sub">Aktuell kein relevanter Verbrauch.</div>'}
+      <div class="bsec" style="margin-top:4px">${line("Summe erfasster Verbraucher", sum)}${line("Kapellenweg 6 gesamt", total)}${line("Nicht zuordenbarer Verbrauch (Rest)", rest, "rest")}</div>
+      <label class="sub" style="display:block;margin-top:4px"><input type="checkbox" class="zt" ${zero ? "checked" : ""}> auch Sensoren ohne Verbrauch zeigen${hidden && !zero ? " (" + hidden + " ausgeblendet)" : ""}</label></div>`;
+  }
+  _tg(k) { return !!(this._openTg ||= {})[k]; }
   _areas(w) {
     const now = this._period === "now";
-    const row = (name, id, cls) => { const v = this._sumW(id, w); const wbOnly = this._ids(id).includes(WB) && now; return `<div class="brow ${cls}"><span>${esc(name)}</span><b>${esc(wbOnly ? "nur in Zeiträumen" : this._fmtW(v))}</b></div>`; };
-    return (w.groups || []).map((g) => `<div class="bsec" style="margin-top:8px">${row(g.name, g.id, "")}</div>${(g.parts || []).map((p) => row("↳ " + p.name, p.id, "sub")).join("")}`).join("")
+    const row = (name, id, cls, tg) => { const v = this._sumW(id, w); const wbOnly = this._ids(id).includes(WB) && now; return `<div class="brow ${cls}"${tg ? ` data-tg="${tg}" style="cursor:pointer" title="Klicken: Verbraucher-Liste ein-/ausklappen"` : ""}><span>${tg ? (this._tg(tg) ? "▾ " : "▸ ") : ""}${esc(name)}</span><b>${esc(wbOnly ? "nur in Zeiträumen" : this._fmtW(v))}</b></div>`; };
+    return (w.groups || []).map((g) => `<div class="bsec" style="margin-top:8px">${row(g.name, g.id, "", g.toggle)}</div>${g.toggle && this._tg(g.toggle) ? this._k6detail(w) : ""}${(g.parts || []).map((p) => row("↳ " + p.name, p.id, "sub")).join("")}`).join("")
       + (w.note ? `<div class="sub" style="margin-top:6px">${esc(w.note)}</div>` : "")
       + (w.wallbox_upload ? (() => { const d = this._wbData(), last = d.length ? new Date(d[d.length - 1][1] * 1000).toLocaleDateString("de-DE") : "–";
         return `<div class="sub" style="margin-top:8px">Wallbox-Daten: ${d.length} Ladevorgänge, letzter bis ${esc(last)}</div>
           <div class="row"><button class="wbu">📤 Neue Wallbox-Daten hochladen (TSV/CSV)</button><input type="file" class="wbf" accept=".tsv,.csv,.txt,text/*" hidden></div>${this._wbMsg ? `<div class="sub warn" style="text-align:left">${esc(this._wbMsg)}</div>` : ""}`; })() : "");
+  }
+  _breakdown(w) {
+    const ids = this._ids(w.breakdown); if (!ids.length) return "";
+    const one = (id) => { const tg = id === (w.detail_total || [])[0] && (w.detail || []).length ? "k6" : ""; const v = this._sumW(id, w);
+      return `<div${tg ? ` data-tg="k6" style="cursor:pointer" title="Klicken: Verbraucher-Liste ein-/ausklappen"` : ""}><span title="${esc(id)}">${tg ? (this._tg("k6") ? "▾ " : "▸ ") : ""}${esc(this._label(w, id))}</span><b>${esc(this._ids(id).includes(WB) && this._period === "now" ? "–" : this._fmtW(v))}</b></div>${tg && this._tg("k6") ? "</div>" + this._k6detail(w) + '<div class="parts">' : ""}`; };
+    return `<div class="parts">${ids.map(one).join("")}</div>`;
   }
   _autarky(w) {
     const cons = this._sumW(w.home, w), imp = this._sumW(w.grid, w), exp = this._sumW(w.grid_export, w), sol = this._sumW(w.solar, w);
@@ -775,7 +804,7 @@ class OmniBatteryDashboard extends HTMLElement {
       <div style="height:8px;border-radius:4px;background:var(--divider-color);overflow:hidden;margin:6px 0 10px"><div style="height:100%;width:${aut || 0}%;background:${col}"></div></div>
       <div class="brow"><span>🏭 Netzbezug</span><b>${esc(this._fmtW(imp))}</b></div>${this._parts(w, this._use(w.grid), true)}
       <div class="brow"><span>⬆ Einspeisung</span><b>${esc(this._fmtW(exp))}</b></div>${this._parts(w, this._use(w.grid_export), true)}
-      <div class="brow"><span>🏠 Verbrauch Gesamt</span><b>${esc(this._fmtW(cons))}</b></div>${this._parts(w, this._ids(w.breakdown), true)}
+      <div class="brow"><span>🏠 Verbrauch Gesamt</span><b>${esc(this._fmtW(cons))}</b></div>${this._breakdown(w)}
       <div class="brow"><span>☀️ Eigenverbrauchsquote Solar</span><b>${pc(eig)}</b></div>
       <div class="sub" style="margin-top:6px">Gilt für die Gesamtanlage (Kapellenweg 6 + 4). Die Netz-Zähler hängen vor beiden Häusern, daher gibt es keine getrennte Autarkie pro Haus. Netzladung der Speicher zählt als Netzbezug. Quelle: Sonnenbatterie „Netz import“ / „Netz export“; in Zeiträumen aus dem Leistungsverlauf (Statistik) hochgerechnet.</div>`;
   }
@@ -1308,6 +1337,7 @@ class OmniBatteryDashboard extends HTMLElement {
     for (const w of this._config.widgets || [])
       for (const k of ["power", "solar", "grid", "grid_export", "battery", "home", "entities", "breakdown"]) this._use(w[k]).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.deduct).forEach((i) => ids.add(i));
+    for (const w of this._config.widgets || []) { for (const it of w.detail || []) this._use(it.id).forEach((i) => ids.add(i)); this._use(w.detail_total).forEach((i) => ids.add(i)); }
     for (const w of this._config.widgets || []) for (const g of w.groups || []) [g.id, ...(g.parts || []).map((p) => p.id)].forEach((x) => this._use(x).forEach((i) => ids.add(i)));
     for (const w of this._config.widgets || []) for (const u of w.units || []) for (const k of ["charge", "discharge"]) this._use(u[k]).forEach((i) => ids.add(i));
     for (const w of this._config.widgets || []) this._ids(w.entities).forEach((i) => ids.add(i));
@@ -1483,6 +1513,8 @@ class OmniBatteryDashboard extends HTMLElement {
     sr.getElementById("rprev")?.addEventListener("click", () => this._shiftRange(-1));
     sr.getElementById("rnext")?.addEventListener("click", () => this._shiftRange(1));
     sr.getElementById("rday")?.addEventListener("click", () => this._setRange(this._rng().from, this._rng().from));
+    R("[data-tg]", "click", (el) => { const k = el.dataset.tg; (this._openTg ||= {})[k] = !this._openTg[k]; this._render(); });
+    R(".zt", "change", (cb) => { this._showZero = cb.checked; this._render(); });
     R(".wbu", "click", () => sr.querySelector(".wbf").click());
     R(".wbf", "change", (inp) => { const f = inp.files?.[0]; if (f) this._wbUpload(f); });
     this.shadowRoot.querySelectorAll(".seg button[data-p]").forEach((b) => b.addEventListener("click", () => this._setPeriod(b.dataset.p)));
