@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.35.0";
+const OB_VERSION = "0.36.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -286,7 +286,7 @@ const CLAUDE_SCENARIOS = (() => {
   ];
   const aut = { type: "autarky", name: "Gesamt · Netzbezug & Autarkie", width: 2, home: [hp("cl_gesamt")], breakdown: [hp("cl_haus"), hp("cl_wbwp"), hp("cl_k4")], solar: [I.prod, I.pvE], grid: [I.gin], grid_export: [I.gout],
     names: { [hp("cl_haus")]: "↳ Kapellenweg 6 Hausverbrauch", [hp("cl_wbwp")]: "↳ Wallbox & Wärmepumpe", [hp("cl_k4")]: "↳ Kapellenweg 4", [I.gin]: "Sonnen Netzbezug (Leistung)", [I.impE]: "Sonnen Netzbezug (Zähler)", [I.gout]: "Sonnen Einspeisung (Leistung)", [I.expE]: "Sonnen Einspeisung (Zähler)", [I.prod]: "Sonnen PV-Produktion (Leistung)", [I.pvE]: "PV-Produktion (Zähler)" } };
-  const split = { type: "areas", name: "Verbrauch nach Bereichen", width: 2,
+  const split = { type: "areas", name: "Verbrauch nach Bereichen", width: 2, wallbox_upload: true,
     note: "Wallbox: aus den heruntergeladenen Ladevorgängen (nur in Zeiträumen, anteilig nach Zeit verteilt). Hausverbrauch = Kapellenweg 6 − Wallbox − Wärmepumpe.",
     groups: [
       { name: "Gesamt (Kapellenweg 6 + 4)", id: hp("cl_gesamt") },
@@ -512,7 +512,7 @@ class OmniBatteryDashboard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error("Ungültige Konfiguration");
     this._rawCanon = canon(config);
-    { const { layout: _l, ...base } = config; this._rawBase = canon(base);
+    { const { layout: _l, wallbox_data: _w, ...base } = config; this._rawBase = canon(base);
       let lay = config.layout;
       if (!lay) { try { lay = JSON.parse(localStorage.getItem("ob_layout:" + hashStr(this._rawBase)) || "null"); } catch (e) { lay = null; } }
       this._layout = lay || {}; }
@@ -760,7 +760,10 @@ class OmniBatteryDashboard extends HTMLElement {
     const now = this._period === "now";
     const row = (name, id, cls) => { const v = this._sumW(id, w); const wbOnly = this._ids(id).includes(WB) && now; return `<div class="brow ${cls}"><span>${esc(name)}</span><b>${esc(wbOnly ? "nur in Zeiträumen" : this._fmtW(v))}</b></div>`; };
     return (w.groups || []).map((g) => `<div class="bsec" style="margin-top:8px">${row(g.name, g.id, "")}</div>${(g.parts || []).map((p) => row("↳ " + p.name, p.id, "sub")).join("")}`).join("")
-      + (w.note ? `<div class="sub" style="margin-top:6px">${esc(w.note)}</div>` : "");
+      + (w.note ? `<div class="sub" style="margin-top:6px">${esc(w.note)}</div>` : "")
+      + (w.wallbox_upload ? (() => { const d = this._wbData(), last = d.length ? new Date(d[d.length - 1][1] * 1000).toLocaleDateString("de-DE") : "–";
+        return `<div class="sub" style="margin-top:8px">Wallbox-Daten: ${d.length} Ladevorgänge, letzter bis ${esc(last)}</div>
+          <div class="row"><button class="wbu">📤 Neue Wallbox-Daten hochladen (TSV/CSV)</button><input type="file" class="wbf" accept=".tsv,.csv,.txt,text/*" hidden></div>${this._wbMsg ? `<div class="sub warn" style="text-align:left">${esc(this._wbMsg)}</div>` : ""}`; })() : "");
   }
   _autarky(w) {
     const cons = this._sumW(w.home, w), imp = this._sumW(w.grid, w), exp = this._sumW(w.grid_export, w), sol = this._sumW(w.solar, w);
@@ -1481,15 +1484,53 @@ class OmniBatteryDashboard extends HTMLElement {
     sr.getElementById("rprev")?.addEventListener("click", () => this._shiftRange(-1));
     sr.getElementById("rnext")?.addEventListener("click", () => this._shiftRange(1));
     sr.getElementById("rday")?.addEventListener("click", () => this._setRange(this._rng().from, this._rng().from));
+    R(".wbu", "click", () => sr.querySelector(".wbf").click());
+    R(".wbf", "change", (inp) => { const f = inp.files?.[0]; if (f) this._wbUpload(f); });
     this.shadowRoot.querySelectorAll(".seg button[data-p]").forEach((b) => b.addEventListener("click", () => this._setPeriod(b.dataset.p)));
     this._drawCharts();
     keep();
+  }
+  /** Wallbox-Ladevorgänge: hochgeladene Daten (Dashboard-Konfiguration oder Browser) ergänzen die eingebauten, gleiche Startzeit = überschrieben */
+  _wbData() {
+    let up = this._config?.wallbox_data;
+    if (!Array.isArray(up)) { try { up = JSON.parse(localStorage.getItem("ob_wallbox") || "null"); } catch (e) { up = null; } }
+    if (this._wbKey === up && this._wbMerged) return this._wbMerged;
+    const m = new Map(WALLBOX_DATA.map((r) => [r[0], r]));
+    (Array.isArray(up) ? up : []).forEach((r) => { if (Array.isArray(r) && r.length >= 3) m.set(r[0], r); });
+    this._wbKey = up; return (this._wbMerged = [...m.values()].sort((a, b) => a[0] - b[0]));
+  }
+  /** TSV/CSV aus dem Sonnen-Portal (Start, Ende, Wh, …) einlesen */
+  _wbParse(txt) {
+    const out = [];
+    for (const line of String(txt).replace(/^\uFEFF/, "").split(/\r?\n/)) {
+      const c = line.split(/\t|;|,(?=\d{4}-)|,(?!\d)/).map((x) => x.trim());
+      if (c.length < 3) continue;
+      const a = Date.parse(c[0]), b = Date.parse(c[1]), wh = parseFloat(String(c[2]).replace(",", "."));
+      if (isNaN(a) || isNaN(b) || isNaN(wh)) continue;
+      out.push([Math.round(a / 1000), Math.round(b / 1000), Math.round(wh)]);
+    }
+    return out;
+  }
+  async _wbUpload(file) {
+    const st = (t) => { this._wbMsg = t; this._render(); };
+    try {
+      const rows = this._wbParse(await file.text());
+      if (!rows.length) return st("Keine Ladevorgänge erkannt – erwartet: Start, Ende, Energie in Wh (Tab-getrennt, wie vom Sonnen-Portal).");
+      const m = new Map((this._config.wallbox_data || []).map((r) => [r[0], r]));
+      rows.forEach((r) => m.set(r[0], r));
+      const all = [...m.values()].sort((a, b) => a[0] - b[0]);
+      let where = "in der Dashboard-Konfiguration (für alle Geräte)";
+      try { await this._patchDashboardCard((n) => { n.wallbox_data = all; }); try { localStorage.removeItem("ob_wallbox"); } catch (e) { /* ignore */ } }
+      catch (e) { where = "nur in diesem Browser (" + (e?.message || e?.code || "kein Zugriff auf die Dashboard-Konfiguration") + ")"; try { localStorage.setItem("ob_wallbox", JSON.stringify(all)); } catch (e2) { /* ignore */ } }
+      this._config = { ...this._config, wallbox_data: all }; this._wbKey = null; this._sig = "";
+      st(`${rows.length} Ladevorgänge eingelesen, gespeichert ${where}.`);
+    } catch (e) { st("Datei konnte nicht gelesen werden: " + (e?.message || e)); }
   }
   /** Wallbox-Energie (kWh) im gewählten Zeitraum: jeder Ladevorgang wird anteilig nach Zeit auf den Zeitraum verteilt */
   _wallbox() {
     const a = this._periodStart().getTime(), b = this._periodEnd().getTime();
     let wh = 0;
-    for (const [s, e, w] of WALLBOX_DATA) {
+    for (const [s, e, w] of this._wbData()) {
       const s0 = s * 1000, e0 = e * 1000;
       if (e0 <= s0) { if (s0 >= a && s0 < b) wh += w; continue; }
       const ov = Math.min(e0, b) - Math.max(s0, a);
