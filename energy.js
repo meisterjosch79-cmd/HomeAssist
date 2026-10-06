@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.31.0";
+const OB_VERSION = "0.32.0";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -20,6 +20,9 @@ const WIDGET_TYPES = {
 };
 
 
+const VIRT = "virtual:unassigned", VIRT_NAME = "Nicht zugeordnete Energiemenge";
+const VIRT_LOSS = "virtual:losses", VIRT_LOSS_NAME = "Anlagenverluste & Messabweichung";
+const HELP_PREFIX = "virtual:helper:";
 // ---------- Szenarien by Claude: fertige, auf dieses Haus zugeschnittene Ansichten. Neue/angepasste Szenarien kommen per Update. ----------
 const CLAUDE_SCENARIOS = (() => {
   const S = "sensor.sonnenbatterie_145854_state_", M1 = "sensor.technik_marstek_venuse_3_0_5b00_venus01_", M2 = "sensor.technik_marstek_venuse_3_0_5f7e_venus02_";
@@ -38,7 +41,11 @@ const CLAUDE_SCENARIOS = (() => {
     H("cl_hausstrom", "Hausstrom Zähler (L1–L3)", I.hs), H("cl_heizstrom", "Heizstromzähler (L1–L3)", I.hz), H("cl_k4", "Kapellenweg 4 (K4, L1–L3)", I.k4),
     H("cl_netz", "Netz (Bezug +, Einspeisung −)", [I.gin, I.gout], { [I.gout]: -1 }),
     H("cl_bat", "Batterien gesamt (Laden +, Entladen −)", [I.bin, I.m1in, I.m2in, I.bout, I.m1out, I.m2out], { [I.bout]: -1, [I.m1out]: -1, [I.m2out]: -1 }),
+    H("cl_pv", "Solar gesamt", [I.prod, I.pvE]),
+    H("cl_gesamt", "Verbrauch Gesamt (K6 + K4)", [hp("cl_pv"), hp("cl_netz"), hp("cl_bat")], { [hp("cl_bat")]: -1 }),
+    H("cl_k6", "Verbrauch Kapellenweg 6 (Gesamt − K4)", [hp("cl_gesamt"), hp("cl_k4")], { [hp("cl_k4")]: -1 }),
   ];
+  const split = { type: "devices", name: "Verbrauch: Gesamt · Kapellenweg 6 · Kapellenweg 4", width: 2, names: { [hp("cl_gesamt")]: "Gesamt (K6 + K4)", [hp("cl_k6")]: "Kapellenweg 6", [hp("cl_k4")]: "Kapellenweg 4" }, entities: [hp("cl_gesamt"), hp("cl_k6"), hp("cl_k4")] };
   const batIds = [I.bin, I.bout, I.m1in, I.m1out, I.m2in, I.m2out], batSigns = { [I.bout]: -1, [I.m1out]: -1, [I.m2out]: -1 };
   const names = {
     [I.prod]: "PV-Produktion (Sonnen)", [I.gin]: "Netzbezug (Sonnen)", [I.gout]: "Einspeisung (Sonnen)", [I.bin]: "Sonnen lädt", [I.bout]: "Sonnen entlädt",
@@ -50,62 +57,76 @@ const CLAUDE_SCENARIOS = (() => {
   const devices = [I.buro, I.heiz, I.klima, I.tv, I.wp];
   return {
     k6_bilanz: {
-      title: "Kapellenweg 6 · Energiefluss & Bilanz",
+      title: "Gesamt · Kapellenweg 6 · Kapellenweg 4 – Energiefluss & Bilanz",
       desc: "Quellen (Sonnenbatterie, 2× Marstek) → Hausstrom-/Heizstrom-Zähler → K4 und Geräte. Zeigt den Rest als „nicht zugeordnet“ und die Anlagenverluste. Umschalter oben wirkt auf alle Teile.",
       requires: [I.prod, I.gin, I.gout, ...I.hs, ...I.hz, ...I.k4, ...devices, I.hsE, I.hzE, I.k4E],
       build: () => ({
         helpers, balance_ref: [hp("cl_hausstrom"), I.hsE, hp("cl_heizstrom"), I.hzE], balance_ref_names: { [hp("cl_hausstrom")]: "Hausstrom Zähler", [I.hsE]: "Hausstrom Zähler", [hp("cl_heizstrom")]: "Heizstromzähler", [I.hzE]: "Heizstromzähler" },
         widgets: [
+          { type: "flow", name: "Gesamt (Kapellenweg 6 + 4)", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin, I.impE], grid_export: [I.gout, I.expE], battery: batIds, signs: batSigns },
+          { ...split, width: 1 },
           { type: "flow", name: "Kapellenweg 6", width: 3, names, solar: [I.prod, I.pvE], grid: [I.gin, I.impE], grid_export: [I.gout, I.expE], battery: batIds, signs: batSigns,
             home: [I.buro, I.buroE, I.heiz, I.heizE, I.klima, I.klimaE, I.tv, I.tvE, I.wp, I.wpE1, I.wpE2, VIRT], deduct: [hp("cl_k4"), I.k4E] },
           { type: "battery", name: "Speicher (Sonnen)", width: 1, soc: I.soc, power: [I.bin, I.bout], signs: { [I.bout]: -1 }, names },
           { type: "balance", name: "Bilanz Kapellenweg 6", width: 2 },
           { type: "devices", name: "Geräte Kapellenweg 6", width: 1, names, entities: devices },
+          { type: "devices", name: "Kapellenweg 4 (K4)", width: 1, names: { [hp("cl_k4")]: "K4 gesamt" }, entities: [hp("cl_k4"), ...I.k4] },
           { type: "battery", name: "Speicher (Marstek)", width: 1, soc: I.msoc, power: [I.m1in, I.m1out, I.m2in, I.m2out], signs: { [I.m1out]: -1, [I.m2out]: -1 }, names },
         ],
       }),
     },
     k6_verlauf: {
-      title: "Kapellenweg 6 · Verlauf (Solar, Netz, Verbrauch, Speicher)",
-      desc: "Ein Diagramm: PV-Produktion, Netz (oberhalb 0 = Bezug, unterhalb = Einspeisung), Speicher (Laden/Entladen) und der gemessene Hausstrom. Zeitraum im Widget einstellbar.",
+      title: "Gesamt · Kapellenweg 6 · Kapellenweg 4 – Verlauf",
+      desc: "Drei Diagramme: Gesamtanlage (PV, Netz, Speicher, Gesamtverbrauch), Kapellenweg 6 (= Gesamt − K4) und Kapellenweg 4. Zeitraum im Widget einstellbar.",
       requires: [I.prod, I.gin, I.gout, ...I.hs],
       build: () => ({
         helpers,
-        widgets: [{ type: "history", name: "Leistung der letzten 24 Stunden", hours: 24, width: 4, series: [
-          { entity: I.prod, name: "PV-Produktion", color: "#e0a800" },
-          { entity: hp("cl_netz"), name: "Netz (Bezug + / Einspeisung −)", color: "#03a9f4" },
-          { entity: hp("cl_bat"), name: "Speicher (Laden + / Entladen −)", color: "#2e9e5b" },
-          { entity: hp("cl_hausstrom"), name: "Hausstrom Zähler", color: "#9c27b0" },
-          { entity: hp("cl_k4"), name: "K4", color: "#e8833a" },
-        ] }],
+        widgets: [
+          { type: "history", name: "Gesamt: Solar, Netz, Speicher, Verbrauch (24 h)", hours: 24, width: 4, series: [
+            { entity: I.prod, name: "PV-Produktion", color: "#e0a800" },
+            { entity: hp("cl_netz"), name: "Netz (Bezug + / Einspeisung −)", color: "#03a9f4" },
+            { entity: hp("cl_bat"), name: "Speicher (Laden + / Entladen −)", color: "#2e9e5b" },
+            { entity: hp("cl_gesamt"), name: "Verbrauch Gesamt", color: "#9c27b0" },
+          ] },
+          { type: "history", name: "Kapellenweg 6 (Gesamt − K4)", hours: 24, width: 2, series: [
+            { entity: hp("cl_k6"), name: "Verbrauch K6", color: "#03a9f4" },
+            { entity: hp("cl_hausstrom"), name: "Hausstrom Zähler", color: "#9c27b0" },
+          ] },
+          { type: "history", name: "Kapellenweg 4 (K4)", hours: 24, width: 2, series: [
+            { entity: hp("cl_k4"), name: "Verbrauch K4", color: "#e8833a" },
+          ] },
+        ],
       }),
     },
     k6_speicher: {
-      title: "Kapellenweg 6 · Speicher-Bilanz & Solar-Verwendung",
-      desc: "Pro Speicher (Sonnen, Marstek Venus01/Venus02) und in Summe: geladen, entladen, Ladestand. Darunter: Wie viel Solarstrom direkt verbraucht wurde, wie viel über die Speicher lief und wie viel eingespeist wurde. Umschalter oben (Aktuell/Tag/Woche/Monat/Jahr) wirkt auf alle Teile.",
+      title: "Gesamt · Kapellenweg 6 · Kapellenweg 4 – Speicher & Solar-Verwendung",
+      desc: "Pro Speicher (Sonnen, Marstek Venus01/Venus02) und in Summe: geladen, entladen, Ladestand. Darunter: Wie viel Solarstrom direkt verbraucht wurde, wie viel über die Speicher lief und wie viel eingespeist wurde. Oben zusätzlich der Verbrauch getrennt nach Gesamt, Kapellenweg 6 und Kapellenweg 4 (Speicher und Solaranlage gehören zur Gesamtanlage und lassen sich nicht auf ein Haus aufteilen). Umschalter oben (Aktuell/Tag/Woche/Monat/Jahr) wirkt auf alle Teile.",
       requires: [I.prod, I.gout, I.bin, I.bout, I.m1in, I.m1out, I.m2in, I.m2out, I.soc, M1 + "state_of_charge", M2 + "state_of_charge"],
       build: () => ({
         widgets: [
-          { type: "storage", name: "Speicher: geladen / entladen / Ladestand", width: 4, units: [
+          { ...split, width: 4 },
+          { type: "storage", name: "Gesamt · Speicher: geladen / entladen / Ladestand (versorgen beide Häuser)", width: 4, units: [
             { name: "Sonnenbatterie", soc: I.soc, capacity_kwh: 5.12, charge: [I.bin], discharge: [I.bout] },
             { name: "Marstek Venus01", soc: M1 + "state_of_charge", capacity_kwh: 5.12, charge: [I.m1in, M1 + "total_grid_import"], discharge: [I.m1out, M1 + "total_grid_export"] },
             { name: "Marstek Venus02", soc: M2 + "state_of_charge", capacity_kwh: 5.12, charge: [I.m2in, M2 + "total_grid_import"], discharge: [I.m2out, M2 + "total_grid_export"] },
           ] },
-          { type: "pvsplit", name: "Solarstrom: direkt verbraucht · über Speicher · eingespeist", width: 4,
+          { type: "pvsplit", name: "Gesamt · Solarstrom: direkt verbraucht · über Speicher · eingespeist", width: 4,
             solar: [I.prod, I.pvE], grid_export: [I.gout, I.expE],
             units: [{ charge: [I.bin] }, { charge: [I.m1in, M1 + "total_grid_import"] }, { charge: [I.m2in, M2 + "total_grid_import"] }] },
         ],
       }),
     },
     k6_geraete: {
-      title: "Kapellenweg 6 · Geräte & Top-Verbraucher",
+      title: "Gesamt · Kapellenweg 6 · Kapellenweg 4 – Geräte & Top-Verbraucher",
       desc: "Messbare Geräte nebeneinander und darunter die größten Verbraucher im ganzen System (Prognose-, Gesamt- und Quellen-Sensoren sind ausgeblendet).",
       requires: devices,
       build: () => ({
         helpers,
         widgets: [
-          { type: "devices", name: "Geräte", width: 2, names, entities: [...devices, hp("cl_k4")] },
-          { type: "top", name: "Top-Verbraucher", width: 2, count: 15, exclude_match: "forecast|geschätzt|marstek system|sonnenbatterie|hausstrom zähler|heizstromzähler|ct phase|ct total|helper|helfer|täglich" },
+          { ...split, width: 4 },
+          { type: "devices", name: "Geräte Kapellenweg 6", width: 2, names, entities: devices },
+          { type: "devices", name: "Kapellenweg 4 (K4)", width: 2, names: { [hp("cl_k4")]: "K4 gesamt" }, entities: [hp("cl_k4"), ...I.k4] },
+          { type: "top", name: "Top-Verbraucher (gesamtes System)", width: 4, count: 15, exclude_match: "forecast|geschätzt|marstek system|sonnenbatterie|hausstrom zähler|heizstromzähler|ct phase|ct total|helper|helfer|täglich" },
         ],
       }),
     },
@@ -174,11 +195,8 @@ const SCHEMAS = {
 };
 
 // Virtueller Sensor: "Nicht zugeordnete Energiemenge" aus der Energiebilanz, nutzbar in Geräteliste und Hausverbrauch
-const VIRT = "virtual:unassigned", VIRT_NAME = "Nicht zugeordnete Energiemenge";
 // zweiter virtueller Sensor: Differenz zwischen berechnetem Verbrauch (Quellen) und dem gemessenen Referenz-Zähler
-const VIRT_LOSS = "virtual:losses", VIRT_LOSS_NAME = "Anlagenverluste & Messabweichung";
 // Helfer = vom Nutzer definierte virtuelle Sensoren (Summe/Differenz mehrerer Sensoren), Id "virtual:helper:<id>"
-const HELP_PREFIX = "virtual:helper:";
 const PAL = ["#03a9f4", "#e8833a", "#2e9e5b", "#9c27b0", "#e0a800", "#d81b60", "#00897b", "#6d4c41"];
 const toIds = (v) => (Array.isArray(v) ? v : v ? [v] : []);
 /** Sammelt Quellen (Solar/Netz/Batterie) und Verbraucher der Energiebilanz aus allen Widgets der Karte (jeder Sensor nur einmal) */
