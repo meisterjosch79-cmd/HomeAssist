@@ -3,7 +3,7 @@
  * Frei konfigurierbar über den visuellen Editor (Config-Seite) der Karte.
  * Widgets: battery, flow, value, devices, history
  */
-const OB_VERSION = "0.41.0";
+const OB_VERSION = "0.41.1";
 
 const WIDGET_TYPES = {
   battery: { label: "Batterie (Laden / Entladen)", icon: "🔋" , short: "Batterie" },
@@ -573,6 +573,9 @@ class OmniBatteryDashboard extends HTMLElement {
   }
 
   getCardSize() { return 3 + (this._config?.widgets?.length || 0); }
+  /** Sections-Ansicht: Karte über die volle Breite (kann in der Karten-YAML mit grid_options überschrieben werden) */
+  getGridOptions() { return { columns: "full", rows: "auto", min_columns: 6 }; }
+  getLayoutOptions() { return { grid_columns: "full", grid_rows: "auto" }; }
 
   _entityIds() {
     const ids = [];
@@ -840,7 +843,7 @@ class OmniBatteryDashboard extends HTMLElement {
       ${line("Selbst verbrauchter Sonnenstrom", used, pr.solar_use, cSolar, -1, "Strom, der nicht eingespeist wurde und deshalb keine Einspeisevergütung bringt")}
       <div class="bsec" style="margin-top:8px">${sum("Wirtschaftliches Ergebnis (nach entgangenem Erlös)", eco, true)}</div>
       <div class="bsec" style="margin-top:8px">Zuordnung nach Haus <small class="sub">Mischpreis ${esc((mix * 100).toFixed(1).replace(".", ","))} ct/kWh = (Netzbezug + entgangener Erlös) ÷ Gesamtverbrauch</small></div>
-      <div style="display:grid;grid-template-columns:1.5fr repeat(4,1fr);gap:2px 8px;font-size:.88em;align-items:baseline">
+      <div style="overflow-x:auto"><div style="display:grid;grid-template-columns:minmax(9em,1.5fr) repeat(4,minmax(5.5em,1fr));gap:2px 8px;font-size:.88em;align-items:baseline">
         ${["", "Verbrauch", "Kosten", "Erlös", "Ergebnis"].map((h, i) => `<b class="sub" style="text-align:${i ? "right" : "left"}">${h}</b>`).join("")}
         ${trow("Kapellenweg 6", K6 || 0, -k6c, 0)}
         ${trow("Kapellenweg 4", k4, -k4c, rK4)}
@@ -848,14 +851,14 @@ class OmniBatteryDashboard extends HTMLElement {
         <b style="border-top:1px solid var(--divider-color);padding-top:3px">Summe</b><b style="text-align:right;border-top:1px solid var(--divider-color);padding-top:3px">${esc(qty((K6 || 0) + k4))}</b>
         <b style="text-align:right;border-top:1px solid var(--divider-color);padding-top:3px">${esc("− " + eur(cost))}</b><b style="text-align:right;border-top:1px solid var(--divider-color);padding-top:3px">${esc(eur(rev))}</b>
         <b style="text-align:right;border-top:1px solid var(--divider-color);padding-top:3px;color:${eco < 0 ? "#c0392b" : "#2e9e5b"}">${esc((eco > 0 ? "+ " : eco < 0 ? "− " : "") + eur(Math.abs(eco)))}</b>
-      </div>
+      </div></div>
       <div class="sub" style="margin-top:4px">Die Summe der Zeilen ergibt das wirtschaftliche Ergebnis. Kosten = Verbrauch × Mischpreis. Kapellenweg 4 zahlt ${pc(pr.k4)} pro kWh (Erlös), die Einspeisung gehört zur Anlage.</div>
       <details class="pd" ${this._piOpen ? "open" : ""} style="margin-top:8px"><summary class="sub" style="cursor:pointer">Preise anpassen</summary>${inp("grid", "Netzbezug Sonnenanlage (Kosten)")}${inp("hz", "Bezug Wärmepumpenzähler (Kosten)")}${inp("solar_use", "Selbst verbrauchter Sonnenstrom (entgangener Erlös)")}${inp("feed_in", "Eingespeister Sonnenstrom (Erlös)")}${inp("k4", "Strom an Kapellenweg 4 (Erlös)")}</details>
       <div class="sub" style="margin-top:6px">Selbst verbrauchter Sonnenstrom = Gesamtverbrauch − Netzbezug (inkl. über die Speicher). Die Beträge hinter den Sensoren in den anderen Übersichten sind Kosten zum Mischpreis${now ? "; „Aktuell“ in € pro Stunde" : ""}.</div>`;
     const col = (v) => (v < 0 ? "#c0392b" : "#2e9e5b"), sg = (v) => (v > 0 ? "+ " : v < 0 ? "− " : "") + eur(Math.abs(v));
     const rows = [["Kapellenweg 6", -k6c], ["Kapellenweg 4", rK4 - k4c], ["Einspeisung (Anlage)", rFeed]];
     const mx = Math.max(1e-9, ...rows.map((r) => Math.abs(r[1])), Math.abs(eco));
-    const dbar = (name, v, bold) => `<div style="display:grid;grid-template-columns:10em 1fr 6.5em;gap:8px;align-items:center;margin:3px 0;${bold ? "border-top:1px solid var(--divider-color);padding-top:5px;margin-top:5px;font-weight:600" : ""}">
+    const dbar = (name, v, bold) => `<div style="display:grid;grid-template-columns:minmax(6.5em,10em) minmax(50px,1fr) 7em;gap:8px;align-items:center;margin:3px 0;${bold ? "border-top:1px solid var(--divider-color);padding-top:5px;margin-top:5px;font-weight:600" : ""}">
       <span style="font-size:.9em">${esc(name)}</span>
       <span style="position:relative;height:12px;background:var(--divider-color);border-radius:6px;opacity:.9"><i style="position:absolute;top:0;bottom:0;border-radius:6px;background:${col(v)};${v < 0 ? "right:50%" : "left:50%"};width:${(Math.abs(v) / mx * 50).toFixed(1)}%"></i><i style="position:absolute;left:50%;top:-2px;bottom:-2px;width:2px;background:var(--primary-text-color);opacity:.5"></i></span>
       <b style="text-align:right;color:${col(v)}">${esc(sg(v))}</b></div>`;
@@ -1534,7 +1537,7 @@ class OmniBatteryDashboard extends HTMLElement {
       ${this._period !== "now" && this._statMissing?.length ? `<div class="sub warn">Keine Langzeitstatistik für: ${esc(this._statMissing.map((i) => this._label({}, i)).join(", "))} (Sensor braucht eine state_class)</div>` : ""}`;
     const keep = this._keepScroll();
     this.shadowRoot.innerHTML = `<style>
-      :host{display:block}
+      :host{display:block;width:100%;min-width:0}
       .seg{display:flex;justify-content:center;gap:4px;flex-wrap:wrap;margin:0 0 12px}
       .seg button{padding:6px 14px;border-radius:16px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer;font:inherit}
       .seg input[type=date]{padding:5px 8px;border-radius:10px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);font:inherit}
@@ -1543,10 +1546,10 @@ class OmniBatteryDashboard extends HTMLElement {
       .warn{text-align:center;margin:-4px 0 10px;color:var(--warning-color,#e8833a)}
       ha-card{padding:16px}
       .title{font-size:1.3em;font-weight:600;margin-bottom:12px}
-      .wrap{container-type:inline-size}
+      .wrap{container-type:inline-size;width:100%;min-width:min(100vw - 48px,420px)}
       .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
       @container (max-width:900px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.w[data-w="3"],.w[data-w="4"]{grid-column:span 2!important}}
-      @container (max-width:560px){.grid{grid-template-columns:minmax(0,1fr)}.w{grid-column:span 1!important}}
+      @container (max-width:560px){.grid{grid-template-columns:minmax(0,1fr)}.w,.w[data-w="2"],.w[data-w="3"],.w[data-w="4"]{grid-column:span 1!important}}
       .lbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 10px;padding:8px 12px;border:1px dashed var(--primary-color);border-radius:10px;font-size:.85em}
       .lbar button,#lay{padding:4px 10px;border-radius:14px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer;font:inherit;font-size:.9em}
       #lay.on{background:var(--primary-color);color:var(--text-primary-color,#fff)}
